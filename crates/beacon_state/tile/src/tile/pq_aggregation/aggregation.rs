@@ -3,9 +3,8 @@ use std::cmp::Reverse;
 use silver_common::{Nanos, TCacheProducer, TCacheRead, TProducer, ssz_view::XMSS_SIGNATURE_SIZE};
 
 use super::{
-    arena::Arena,
     claims::Claim,
-    strategy::Batch,
+    strategy::{Batch, Strategy},
     wire::{AggregateRequest, AggregateResponse, MAX_REQUEST_LEN},
 };
 
@@ -13,18 +12,10 @@ const MAX_FAILURES: u8 = 3;
 
 /// Claims verified by a signature or a proof.
 enum VerifiedClaims {
-    /// A vote: its claim and leanXMSS signature.
-    Signature(Claim, Box<[u8; XMSS_SIGNATURE_SIZE]>),
-    /// An aggregate: its index in the proof arenas.
-    Proof(usize),
-}
-
-/// The aggregates' claims and proofs, one run each per aggregate.
-#[derive(Default)]
-struct ProofArenas {
-    /// Each run sorted, without repeats.
-    claims: Arena<Claim>,
-    proofs: Arena<u8>,
+    /// A vote: its claim and its leanXMSS signature's index in `signatures`.
+    Signature(Claim, usize),
+    /// An aggregate: its claims, sorted without repeats, and their proof.
+    Proof(Vec<Claim>, Vec<u8>),
 }
 
 /// `claims` is exactly the union of the verified claims at `covered_indices`.
@@ -56,21 +47,23 @@ pub struct Priority {
     pub waiting: usize,
 }
 
-/// The core of one aggregation: its verified claims, the best proof and every
-/// check. Its wrapper picks the batches.
-pub struct Aggregation {
+/// The core of one aggregation: its verified claims, the best proof, every
+/// check, and the strategy that picks the batches.
+pub struct Aggregation<S> {
     deadline: Nanos,
+    strategy: S,
     verified: Vec<VerifiedClaims>,
-    proofs: ProofArenas,
+    /// The votes' signatures, in one buffer rather than one allocation each.
+    signatures: Vec<[u8; XMSS_SIGNATURE_SIZE]>,
     best: Option<BestProof>,
     /// Failed batches since the best proof last grew.
     failures: u8,
 }
 
-impl Aggregation {
+impl<S: Strategy> Aggregation<S> {
     pub fn new(deadline: Nanos) -> Self {
-        let (verified, proofs) = (Vec::new(), ProofArenas::default());
-        Self { deadline, verified, proofs, best: None, failures: 0 }
+        let (verified, signatures) = (Vec::new(), Vec::new());
+        Self { deadline, strategy: S::default(), verified, signatures, best: None, failures: 0 }
     }
 
     /// A later local aggregator keeps it open longer; it never closes earlier.
@@ -78,33 +71,44 @@ impl Aggregation {
         self.deadline = self.deadline.max(deadline);
     }
 
-    /// Empty again, keeping its buffers.
-    pub fn reset(&mut self, deadline: Nanos) {
-        self.deadline = deadline;
-        self.verified.clear();
-        self.proofs.claims.clear();
-        self.proofs.proofs.clear();
-        self.best = None;
-        self.failures = 0;
-    }
-
-    /// The vote takes the next index.
-    pub fn add_signature(&mut self, claim: Claim, signature: Box<[u8; XMSS_SIGNATURE_SIZE]>) {
-        self.verified.push(VerifiedClaims::Signature(claim, signature));
+    /// The vote takes the next index. `false` when the strategy refuses it.
+    pub fn add_signature(
+        &mut self,
+        positions: S::Positions,
+        claim: Claim,
+        signature: &[u8; XMSS_SIGNATURE_SIZE],
+    ) -> bool {
+        let fits = self.strategy.arrived(self.verified.len(), positions);
+        if fits {
+            self.verified.push(VerifiedClaims::Signature(claim, self.signatures.len()));
+            self.signatures.push(*signature);
+        }
+        fits
     }
 
     /// The aggregate takes the next index. `claims` are sorted, without
-    /// repeats.
-    pub fn add_proof(&mut self, claims: &[Claim], proof: &[u8]) {
-        debug_assert!(claims.is_sorted_by(|a, b| a < b), "claims sorted, without repeats");
-        self.verified.push(VerifiedClaims::Proof(self.proofs.claims.len()));
-        self.proofs.claims.push(claims);
-        self.proofs.proofs.push(proof);
+    /// repeats. `false` when the strategy refuses it.
+    pub fn add_proof(
+        &mut self,
+        positions: S::Positions,
+        claims: Vec<Claim>,
+        proof: Vec<u8>,
+    ) -> bool {
+        let fits = self.strategy.arrived(self.verified.len(), positions);
+        if fits {
+            self.verified.push(VerifiedClaims::Proof(claims, proof));
+        }
+        fits
     }
 
     /// Indices of the verified claims the best proof covers, ascending.
     pub fn covered_indices(&self) -> &[usize] {
         self.best.as_ref().map_or(&[], |best| &best.covered_indices)
+    }
+
+    /// The best proof's claims and proof, and the indices it covers.
+    pub fn into_best(self) -> Option<(Vec<Claim>, Vec<u8>, Vec<usize>)> {
+        self.best.map(|best| (best.claims, best.proof, best.covered_indices))
     }
 
     pub fn best_proof(&self) -> Option<(&[Claim], &[u8])> {
@@ -115,22 +119,23 @@ impl Aggregation {
         self.failures >= MAX_FAILURES
     }
 
-    /// `None` at or past its deadline, once stopped, or with nothing waiting.
-    pub fn priority(&self, now: Nanos, waiting: usize) -> Option<Priority> {
+    /// `None` at or past its deadline, once stopped, or when no waiting
+    /// verified claims add a position.
+    pub fn priority(&self, now: Nanos) -> Option<Priority> {
+        let waiting = self.strategy.waiting();
         let open = now < self.deadline && !self.is_stopped() && waiting > 0;
         open.then_some(Priority { deadline: Reverse(self.deadline), waiting })
     }
 
-    /// `batch` if it holds at most `limit` verified claims, all waiting.
-    /// Anything else is a strategy bug. A bug counts as a failure, so it
-    /// cannot repeat forever.
-    pub fn check_batch(&mut self, batch: Option<Batch>, limit: usize) -> Option<Batch> {
-        let batch = batch.filter(|batch| self.is_valid_batch(batch, limit));
-        if batch.is_none() {
-            silver_log::error!("strategy returned no valid batch");
-            debug_assert!(false, "strategy returned no valid batch");
-            self.failures += 1;
-        }
+    /// At most `limit` waiting verified claims. `None` exactly when
+    /// `priority` is.
+    pub fn next_batch(&self, now: Nanos, limit: usize) -> Option<Batch> {
+        self.priority(now)?;
+        let batch = self.strategy.next_batch(limit);
+        debug_assert!(
+            batch.as_ref().is_some_and(|batch| self.is_valid_batch(batch, limit)),
+            "strategy returned no valid batch"
+        );
         batch
     }
 
@@ -151,16 +156,13 @@ impl Aggregation {
         let proofs = (self.best.iter())
             .map(|best| (best.claims.as_slice(), best.proof.as_slice()))
             .collect();
-        let log_inv_rate = batch.log_inv_rate();
-        let mut request = AggregateRequest { log_inv_rate, proofs, signatures: Vec::new() };
+        let mut request = AggregateRequest { proofs, signatures: Vec::new(), output: None };
         for &index in batch.indices() {
             match &self.verified[index] {
-                VerifiedClaims::Signature(claim, signature) => {
-                    request.signatures.push((claim, signature))
+                VerifiedClaims::Signature(claim, at) => {
+                    request.signatures.push((claim, &self.signatures[*at]))
                 }
-                &VerifiedClaims::Proof(at) => {
-                    request.proofs.push((self.proofs.claims.get(at), self.proofs.proofs.get(at)))
-                }
+                VerifiedClaims::Proof(claims, proof) => request.proofs.push((claims, proof)),
             }
         }
         request
@@ -169,7 +171,7 @@ impl Aggregation {
     fn claims(&self, index: usize) -> &[Claim] {
         match &self.verified[index] {
             VerifiedClaims::Signature(claim, _) => std::slice::from_ref(claim),
-            &VerifiedClaims::Proof(at) => self.proofs.claims.get(at),
+            VerifiedClaims::Proof(claims, _) => claims,
         }
     }
 
@@ -177,9 +179,15 @@ impl Aggregation {
     /// without an answer. The response's proof becomes the best proof only if
     /// it proves exactly the claims of the covered verified claims and the
     /// batch. A refusal counts as a failure.
-    pub fn finish(&mut self, batch: &Batch, body: Option<&[u8]>) -> Result<(), &'static str> {
-        let best = body.ok_or("no answer").and_then(|body| self.adopt_response(body, batch));
-        self.failures = if best.is_ok() { 0 } else { self.failures + 1 };
+    pub fn finish(&mut self, batch: Batch, body: Option<&[u8]>) -> Result<(), &'static str> {
+        let best = body.ok_or("no answer").and_then(|body| self.adopt_response(body, &batch));
+        match best {
+            Ok(()) => {
+                self.failures = 0;
+                self.strategy.adopted(&batch);
+            }
+            Err(_) => self.failures += 1,
+        }
         best
     }
 

@@ -791,6 +791,7 @@ impl BeaconStateTile {
     fn commit_pq_attestation(&mut self, p: PreparedPqAttestation) -> Feedback {
         let checked = p.checked;
         let target = checked.target;
+        self.arrival_timers.attestation(target.attestation_slot, &self.ticker);
         self.seen_attesters.mark(target.target_epoch, checked.attester as usize);
         let position = (self.aggregator_subnets.get(target.attestation_slot))
             .and_then(|held| held.last_aggregator_position(p.subnet));
@@ -1746,7 +1747,10 @@ impl BeaconStateTile {
         if SignedBlockLayout::at_slot(&self.spec, node.slot) != layout {
             return EnvelopeCheck::Reject;
         }
-        if node.slot < self.fork_choice.finalized_checkpoint().epoch * SLOTS_PER_EPOCH {
+        // The finalized block sits below its epoch's start when the slots up to
+        // it were skipped, and its children still build on its payload.
+        let finalized = self.fork_choice.finalized_checkpoint();
+        if block_root != finalized.root && node.slot < finalized.epoch * SLOTS_PER_EPOCH {
             return EnvelopeCheck::Ignore;
         }
         let state_id = node.state_id;
@@ -2434,6 +2438,7 @@ impl BeaconStateTile {
                     Ok(sent) => sent,
                     Err(feedback) => return Some(feedback),
                 };
+                self.arrival_timers.aggregate(aggregate.target.attestation_slot, &self.ticker);
                 let gossip = GossipAwaitingProof::Aggregate(aggregate);
                 let slot = self.ticker.current_slot();
                 self.gossip_proofs.park(*m, pin.clone(), gossip, slot, request_id..request_id + 1);
@@ -2471,8 +2476,14 @@ impl BeaconStateTile {
     ) -> Result<(u64, AggregateAwaitingProof), Feedback> {
         let (state_id, mut aggregate) = self.check_pq_aggregate(signed)?;
         self.verify_pq_aggregator(signed, state_id, &aggregate)?;
-        let block_slot = aggregate.target.attestation_slot + MIN_ATTESTATION_INCLUSION_DELAY_PQ;
-        let merges = self.proposes_locally(block_slot);
+        // The rolling proof serves any later local proposal. Without it only
+        // the first block to include the aggregate uses it.
+        let merges = if self.pq_aggregator.is_rolling() {
+            self.has_local_proposers()
+        } else {
+            let block_slot = aggregate.target.attestation_slot + MIN_ATTESTATION_INCLUSION_DELAY_PQ;
+            self.proposes_locally(block_slot)
+        };
 
         let data = SignedAggregateAndProofPqView::agg_data(signed);
         let view = self.state.read_view(state_id);
@@ -2694,34 +2705,19 @@ impl BeaconStateTile {
             );
         }
         if let Some(message) = aggregate.merge_message {
-            self.merge_pq_aggregate(signed, slot, &aggregate.attesters, &message);
+            // The attesters are active, so the head holds their pubkeys.
+            let view = self.state.read_view(self.canonical_state_id());
+            let claims = aggregate.attesters.iter().map(|&attester| {
+                claim(xmss_pubkey(view.validators.pubkey(attester as usize)), &message)
+            });
+            let proof = SignedAggregateAndProofPqView::proof(signed);
+            let attestation = SignedAggregateAndProofPqView::aggregate(signed);
+            match Aggregate::new(attestation, &aggregate.attesters, claims, proof) {
+                Some(merged) => self.pq_aggregator.add_aggregate(merged, &self.ticker),
+                None => silver_log::error!(slot, "verified aggregate does not fit a merge"),
+            }
         }
         Feedback::Accept
-    }
-
-    /// The attesters are active, so the head holds their pubkeys.
-    fn merge_pq_aggregate(
-        &mut self,
-        signed: &[u8],
-        slot: Slot,
-        attesters: &[u32],
-        message: &[u8; 32],
-    ) {
-        let view = self.state.read_view(self.canonical_state_id());
-        let claims = &mut self.pq_merge_claims;
-        claims.clear();
-        claims.extend(attesters.iter().map(|&attester| {
-            claim(xmss_pubkey(view.validators.pubkey(attester as usize)), message)
-        }));
-        let proof = SignedAggregateAndProofPqView::proof(signed);
-        let attestation = SignedAggregateAndProofPqView::aggregate(signed);
-        match Aggregate::new(claims, proof, attestation) {
-            Some(merged) => {
-                let block_slot = slot + MIN_ATTESTATION_INCLUSION_DELAY_PQ;
-                self.pq_aggregator.add_aggregate(block_slot, merged, &self.ticker);
-            }
-            None => silver_log::error!(slot, "verified aggregate does not fit a merge"),
-        }
     }
 
     fn commit_pq_attester_slashing(&mut self, slashing: &[u8]) -> Feedback {

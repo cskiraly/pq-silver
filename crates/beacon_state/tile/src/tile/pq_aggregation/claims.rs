@@ -1,6 +1,7 @@
-use silver_beacon_state_data::B256;
+use silver_beacon_state_data::{B256, Slot};
 use silver_common::{
     Nanos,
+    merkle::bitlist_len,
     ssz_view::{AttestationPqView, MAX_STARK_PROOF_SIZE, SINGLE_ATT_PQ_SIZE, XMSS_SIGNATURE_SIZE},
 };
 
@@ -30,54 +31,95 @@ pub struct VerifiedVote<'a> {
     pub received: Nanos,
 }
 
-pub struct Vote {
+pub struct Vote<'a> {
     pub(super) committee_position: usize,
     pub(super) claim: Claim,
-    pub(super) signature: Box<[u8; XMSS_SIGNATURE_SIZE]>,
+    pub(super) signature: &'a [u8; XMSS_SIGNATURE_SIZE],
 }
 
-impl Vote {
+impl<'a> Vote<'a> {
     /// The caller has verified `signature` over `message` for `pubkey`.
     pub fn new(
         committee_position: usize,
         pubkey: [u8; 32],
         message: [u8; 32],
-        signature: &[u8; XMSS_SIGNATURE_SIZE],
+        signature: &'a [u8; XMSS_SIGNATURE_SIZE],
     ) -> Self {
         let claim = claim(&pubkey, &message);
-        Self { committee_position, claim, signature: Box::new(*signature) }
+        Self { committee_position, claim, signature }
     }
 }
 
-pub struct Aggregate<'a> {
-    /// Sorted, without repeats.
-    pub(super) claims: &'a [Claim],
-    pub(super) proof: &'a [u8],
-    /// The aggregate's `AttestationPq` SSZ, for the block body.
-    pub(super) attestation: &'a [u8],
-    /// Read from `attestation`; as many as `claims`.
-    pub(super) positions: Positions,
+/// One voter of a committee: its place in the committee and its claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Member {
+    pub(super) position: usize,
+    pub(super) validator: u32,
+    pub(super) claim: Claim,
 }
 
-impl<'a> Aggregate<'a> {
-    /// The caller has verified `proof` for `claims`: our own proof, or a
-    /// received one that a leanVM sidecar `verify` accepted. `claims` is
-    /// sorted and loses its repeats. `None` for no claims, a proof above the
-    /// size bound, or an `attestation` that is not of one committee or names
-    /// another number of positions than claims.
-    pub fn new(claims: &'a mut Vec<Claim>, proof: &'a [u8], attestation: &'a [u8]) -> Option<Self> {
+/// One committee's votes for one attestation data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Group {
+    pub(super) committee: Committee,
+    pub(super) slot: Slot,
+    pub(super) committee_len: usize,
+    /// Ascending by position, without repeats.
+    pub(super) members: Vec<Member>,
+}
+
+impl Group {
+    pub(super) fn positions(&self) -> Positions {
+        let bits = self.members.iter().map(|member| member.position).collect();
+        Positions { committee: self.committee, bits }
+    }
+}
+
+pub struct Aggregate {
+    /// Sorted, without repeats.
+    pub(super) claims: Vec<Claim>,
+    pub(super) proof: Vec<u8>,
+    pub(super) group: Group,
+}
+
+impl Aggregate {
+    /// `attestation` is an `AttestationPq` of one committee. `attesters` and
+    /// `claims` are its voters, in committee order. The caller has verified
+    /// `proof` for `claims`: our own proof, or a received one that a leanVM
+    /// sidecar `verify` accepted. `None` for no voter, a proof above the size
+    /// bound, an `attestation` not of one committee, or voters that do not
+    /// match its positions one for one.
+    pub fn new(
+        attestation: &[u8],
+        attesters: &[u32],
+        claims: impl IntoIterator<Item = Claim>,
+        proof: &[u8],
+    ) -> Option<Self> {
+        if proof.len() > MAX_STARK_PROOF_SIZE {
+            return None;
+        }
+        let (index, mut positions) = AttestationPqView::one_committee_positions(attestation)?;
+        let mut members = Vec::with_capacity(attesters.len());
+        for (&validator, claim) in attesters.iter().zip(claims) {
+            members.push(Member { position: positions.next()?, validator, claim });
+        }
+        if members.is_empty() || members.len() != attesters.len() || positions.next().is_some() {
+            return None;
+        }
+        let mut claims: Vec<_> = members.iter().map(|member| member.claim).collect();
         claims.sort_unstable();
         claims.dedup();
-        let (index, bits) = AttestationPqView::one_committee_positions(attestation)?;
-        let data = *AttestationPqView::data(attestation).as_bytes();
-        let positions = Positions { committee: Committee { data, index }, bits: bits.collect() };
-        let consistent = positions.bits.count() == claims.len();
-        (consistent && !claims.is_empty() && proof.len() <= MAX_STARK_PROOF_SIZE).then_some(Self {
-            claims,
-            proof,
-            attestation,
-            positions,
-        })
+        if claims.len() != members.len() {
+            return None;
+        }
+        let data = AttestationPqView::data(attestation);
+        let group = Group {
+            committee: Committee { data: *data.as_bytes(), index },
+            slot: data.slot(),
+            committee_len: bitlist_len(AttestationPqView::aggregation_bits(attestation)),
+            members,
+        };
+        Some(Self { claims, proof: proof.to_vec(), group })
     }
 }
 

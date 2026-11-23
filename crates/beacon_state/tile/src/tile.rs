@@ -22,6 +22,7 @@ use silver_common::{
     TProducer, TReadMode, TileId, hex32,
     ssz_view::{STATUS_V2_SIZE, SYNC_COMMITTEE_CONTRIBUTION_SIZE},
     ticker::{MAXIMUM_GOSSIP_CLOCK_DISPARITY, SlotTicker, TickEvent},
+    wake_within,
 };
 use silver_config::{PendingBounds, SyncingConfig};
 use silver_slashing::SlashingPool;
@@ -30,6 +31,7 @@ use crate::{
     fork_choice::{ExecutionStatus, FORK_CHOICE_NODES_HINT, ForkChoice},
     ssz_hash, stf,
     tile::{
+        arrival_timers::ArrivalTimers,
         attestation_pool::{AttestationPool, UnknownRootPqVotes, UnknownRootVotes},
         attestation_root_memo::AttestationRootMemo,
         bid_pool::BidPool,
@@ -46,7 +48,7 @@ use crate::{
         payload_attributes::PayloadAttributes,
         payload_execution_requests::PayloadExecutionRequests,
         pending_envelopes::{BLOCK_WAIT_SLOTS, PendingEnvelopes},
-        pq_aggregation::{Claim, PqAggregator, wire::MAX_REQUEST_LEN},
+        pq_aggregation::{PqAggregator, wire::MAX_REQUEST_LEN},
         precomputed_epochs::PrecomputedEpochs,
         proposer_preparations::ProposerPreparations,
         seen_aggregates::SeenAggregates,
@@ -58,6 +60,7 @@ use crate::{
     weak_subjectivity::{weak_subjectivity_period_fulu, weak_subjectivity_period_gloas},
 };
 
+mod arrival_timers;
 mod attestation_pool;
 mod precomputed_epochs;
 // `pub` for the crate's `attestation_root_memo` criterion bench.
@@ -88,6 +91,10 @@ mod seen_proposer_preferences;
 mod seen_validators;
 mod shuffling_cache;
 mod sync_contribution_pool;
+
+/// Longest idle park. Payload, bid and aggregation deadlines are not slot
+/// phases, so the ticker does not bound them.
+const IDLE_WAKE: Duration = Duration::from_millis(5);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Feedback {
@@ -279,8 +286,7 @@ pub struct BeaconStateTile {
     payload_execution_requests: PayloadExecutionRequests,
     payload_attestation_pool: PayloadAttestationPool,
     pq_aggregator: PqAggregator,
-    /// Reused to build each merged aggregate's claims.
-    pq_merge_claims: Vec<Claim>,
+    arrival_timers: ArrivalTimers,
     /// The VC's committee subscriptions, for its aggregators' subnets.
     aggregator_subnets: SubnetsBySlot,
     leanvm_verifier: LeanVmVerifier,
@@ -385,7 +391,7 @@ impl BeaconStateTile {
             payload_execution_requests: PayloadExecutionRequests::default(),
             payload_attestation_pool: PayloadAttestationPool::default(),
             pq_aggregator: PqAggregator::default(),
-            pq_merge_claims: Vec::new(),
+            arrival_timers: ArrivalTimers::new(),
             aggregator_subnets: SubnetsBySlot::default(),
             leanvm_verifier: LeanVmVerifier::default(),
             gossip_proofs: GossipProofs::default(),
@@ -398,6 +404,12 @@ impl BeaconStateTile {
         tile.seed_anchor(anchor, anchor_header, val_cap);
         silver_log::info!("created BeaconStateTile: head_state_slot is {}", tile.head_state_slot());
         tile
+    }
+
+    /// Keeps a rolling proof of pooled PQ votes for local proposals. Off, a
+    /// proposal includes only the newest slot it may.
+    pub fn enable_pq_rolling_aggregate(&mut self) {
+        self.pq_aggregator.enable_rolling();
     }
 
     pub fn open_tcaches(&mut self) -> Result<(), TCacheError> {
@@ -610,7 +622,10 @@ impl BeaconStateTile {
 
         let mut buf = [0u8; STATUS_V2_SIZE];
         buf[0..4].copy_from_slice(&fork_digest);
-        buf[4..36].copy_from_slice(&finalized.root);
+        // Spec: the genesis finalized checkpoint goes out with a zero root.
+        // Peers past genesis check any other root against their own chain.
+        let finalized_root = if finalized.epoch == 0 { [0; 32] } else { finalized.root };
+        buf[4..36].copy_from_slice(&finalized_root);
         buf[36..44].copy_from_slice(&finalized.epoch.to_le_bytes());
         buf[44..76].copy_from_slice(&head_root);
         buf[76..84].copy_from_slice(&slot.to_le_bytes());
@@ -942,6 +957,9 @@ impl BeaconStateTile {
         self.attestation_root_memo.prune_before(floor);
         self.pq_aggregator.prune_before(floor);
         self.gossip_proofs.prune_before(floor);
+        if self.pq_aggregator.is_leanvm_up() {
+            self.rerequest_unanswered_blocks(producers);
+        }
         self.payload_bids_pool.on_slot(slot);
         self.seen_proposer_preferences.on_slot(slot);
         self.envelope_arrivals.on_slot(slot);
@@ -1177,9 +1195,14 @@ impl BeaconStateTile {
 
         // Health first: a disconnect fails the batch in flight once, before
         // its `None` answer arrives.
-        adapter.consume(|health: LeanVmHealthEvent, _| self.pq_aggregator.on_health(health));
+        adapter.consume(|health: LeanVmHealthEvent, producers| {
+            if health.ready {
+                self.rerequest_unanswered_blocks(producers);
+            }
+            self.pq_aggregator.on_health(health);
+        });
         adapter.consume(|resp: LeanVmResp, producers| {
-            if let Some(verdict) = LeanVmVerifier::verdict(&resp, &mut self.reader) {
+            if let Some(verdict) = self.leanvm_verifier.verdict(&resp, &mut self.reader) {
                 let request_id = resp.request_id;
                 silver_log::debug!(request_id, ?verdict, "leanvm proof verdict");
                 if !self.gossip_proofs.awaits(request_id) {
@@ -1242,7 +1265,20 @@ impl BeaconStateTile {
         if let Some((topic, ssz)) = pq {
             let acquired = self.reader.acquire(ssz);
             let Ok((data, _)) = acquired.buffer() else { return };
-            if topic.check_pq_signed_message(data).is_err() {
+            if let Err(reason) = topic.check_pq_signed_message(data) {
+                // A lapping writer tears the bytes; that is no fault of the peer.
+                if acquired.revalidate().is_err() {
+                    silver_log::warn!(?stream_id, ?topic, "PQ rpc response lapped in the tcache");
+                    return;
+                }
+                silver_log::warn!(
+                    ?stream_id,
+                    ?topic,
+                    len = data.len(),
+                    reason,
+                    "PQ rpc response failed its format check"
+                );
+                silver_log::debug!(head = ?&data[..data.len().min(128)], "failed PQ rpc response");
                 producers.produce(silver_common::PeerEvent::RpcMisbehaviour {
                     p2p_peer: stream_id.peer(),
                     severity: silver_common::RpcSeverity::LowTolerance,
@@ -1575,6 +1611,8 @@ impl Tile<SilverSpine> for BeaconStateTile {
         // After every event, so a request goes out in the iteration that unlocked it.
         let tcache = &mut self.events_producer;
         self.pq_aggregator.send_next(&self.ticker, tcache, &mut adapter.producers);
+
+        wake_within(adapter, self.ticker.until_next_tick().min(IDLE_WAKE));
     }
 }
 

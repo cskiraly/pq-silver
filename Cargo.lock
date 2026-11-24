@@ -53,6 +53,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "aggregation"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "claims",
+ "fiat_shamir_prover",
+ "isa",
+ "keccak256",
+ "lean_da",
+ "lean_sphincs",
+ "lean_xmss",
+ "stable_lean_vm_core",
+ "stable_pcs",
+ "stable_primitives",
+ "tracing",
+ "verifier",
+ "zkdsl_compiler",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1281,6 +1301,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93a719913643003b84bd13022b4b7e703c09342cd03b679c4641c7d2e50dc34d"
 
 [[package]]
+name = "claims"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "lean_sphincs",
+ "lean_xmss",
+]
+
+[[package]]
 name = "clap"
 version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2179,6 +2208,74 @@ dependencies = [
 ]
 
 [[package]]
+name = "experimental_dispatch"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "experimental_lean_vm_core",
+ "isa",
+ "verifier",
+]
+
+[[package]]
+name = "experimental_keccak_gkr"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "experimental_parallel",
+ "experimental_pcs",
+ "experimental_primitives",
+ "fiat_shamir_prover",
+ "tracing",
+ "verifier",
+]
+
+[[package]]
+name = "experimental_lean_vm_core"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "experimental_keccak_gkr",
+ "experimental_parallel",
+ "experimental_pcs",
+ "experimental_primitives",
+ "fiat_shamir_prover",
+ "isa",
+ "tracing",
+ "verifier",
+]
+
+[[package]]
+name = "experimental_parallel"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "experimental_pcs"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "experimental_parallel",
+ "experimental_primitives",
+ "fiat_shamir_prover",
+ "tracing",
+ "verifier",
+]
+
+[[package]]
+name = "experimental_primitives"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "experimental_parallel",
+ "fiat_shamir_prover",
+ "keccak256",
+]
+
+[[package]]
 name = "fastbloom"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2233,6 +2330,15 @@ name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
+
+[[package]]
+name = "fiat_shamir_prover"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "keccak256",
+ "verifier",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -3479,6 +3585,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
+name = "isa"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "verifier",
+]
+
+[[package]]
 name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3631,6 +3745,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "keccak256"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+
+[[package]]
 name = "konst"
 version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3665,6 +3784,59 @@ name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
+name = "lean_da"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "keccak256",
+ "stable_pcs",
+ "stable_primitives",
+ "tracing",
+ "verifier",
+]
+
+[[package]]
+name = "lean_sphincs"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "keccak256",
+]
+
+[[package]]
+name = "lean_vm"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "aggregation",
+ "claims",
+ "experimental_dispatch",
+ "isa",
+ "lean_da",
+ "lean_sphincs",
+ "lean_vrf",
+ "lean_xmss",
+ "stable_lean_vm_core",
+ "verifier",
+]
+
+[[package]]
+name = "lean_vrf"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "keccak256",
+]
+
+[[package]]
+name = "lean_xmss"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "keccak256",
+]
 
 [[package]]
 name = "libc"
@@ -6062,6 +6234,7 @@ dependencies = [
  "silver_discovery",
  "silver_gossip",
  "silver_httpcore",
+ "silver_leanvm",
  "silver_log",
  "silver_network",
  "silver_peer",
@@ -6084,7 +6257,6 @@ dependencies = [
  "silver_config",
  "silver_engine_api",
  "silver_httpcore",
- "silver_leanvm_api",
  "silver_log",
  "silver_observe",
  "silver_pbs",
@@ -6425,15 +6597,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "silver_leanvm_api"
+name = "silver_leanvm"
 version = "0.1.0-alpha.17"
 dependencies = [
  "flux",
- "mio",
+ "lean_vm",
  "silver_common",
- "silver_httpcore",
  "silver_log",
- "tempfile",
 ]
 
 [[package]]
@@ -6924,6 +7094,62 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "stable_keccak_gkr"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "fiat_shamir_prover",
+ "stable_parallel",
+ "stable_pcs",
+ "stable_primitives",
+ "tracing",
+ "verifier",
+]
+
+[[package]]
+name = "stable_lean_vm_core"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "fiat_shamir_prover",
+ "isa",
+ "stable_keccak_gkr",
+ "stable_parallel",
+ "stable_pcs",
+ "stable_primitives",
+ "tracing",
+ "verifier",
+]
+
+[[package]]
+name = "stable_parallel"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+
+[[package]]
+name = "stable_pcs"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "fiat_shamir_prover",
+ "stable_parallel",
+ "stable_primitives",
+ "tracing",
+ "verifier",
+]
+
+[[package]]
+name = "stable_primitives"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "fiat_shamir_prover",
+ "isa",
+ "keccak256",
+ "stable_parallel",
+]
 
 [[package]]
 name = "stacker"
@@ -7692,6 +7918,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 
 [[package]]
+name = "verifier"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+
+[[package]]
 name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8427,6 +8658,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
+]
+
+[[package]]
+name = "zkdsl_compiler"
+version = "0.1.0"
+source = "git+https://github.com/leanEthereum/leanVM?tag=bindings-v0.17.0#1e997c9927d3e7fafa2b813734f56e25d7a4da69"
+dependencies = [
+ "isa",
+ "keccak256",
+ "verifier",
 ]
 
 [[package]]

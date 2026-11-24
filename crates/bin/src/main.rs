@@ -37,6 +37,7 @@ use silver_control::{Controller, sync_engine::SyncEngine};
 use silver_discovery::{DiscV5, Discovery};
 use silver_gossip::GossipHandler;
 use silver_httpcore::Bind;
+use silver_leanvm::LeanVmTile;
 use silver_network::{ClusterNodes, Context, InboundLimits, NetworkTile, P2p};
 use silver_peer::PeerManager;
 use silver_storage::tile::StorageTile;
@@ -66,6 +67,9 @@ const CONTROL_RPC_TCACHE_SIZE: usize = 1 << 20;
 /// two-million-validator set, so the two the validator API serves never wait
 /// on the one being written.
 const BEACON_STATE_TCACHE_SIZE: usize = 1 << 25;
+/// leanVM responses: a proof is at most 1 MiB, and `beacon_state` copies
+/// each out as it arrives.
+const LEANVM_TCACHE_SIZE: usize = 1 << 24;
 /// Every column of a full block is about 6 MiB.
 const PROPOSED_COLUMNS_TCACHE_SIZE: usize = 1 << 24;
 const _: () = assert!(
@@ -169,6 +173,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         TCache::producer(TCacheId::BeaconStateHandoff, BEACON_STATE_TCACHE_SIZE);
     let proposed_columns_producer =
         TCache::producer(TCacheId::ProposedColumns, PROPOSED_COLUMNS_TCACHE_SIZE);
+    let leanvm_producer = TCache::producer(TCacheId::LeanVmProcessing, LEANVM_TCACHE_SIZE);
 
     // Tiles.
     let keypair = Keypair::load_or_create(Path::new(&chain_config.data_dir))?;
@@ -287,6 +292,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         beacon_state_handoff_producer.cache_ref(),
         control_slot_producer.cache_ref(),
         proposed_columns_producer.cache_ref(),
+        leanvm_producer.cache_ref(),
     ]);
 
     let p2p_context = Context {
@@ -403,7 +409,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &spec,
         beacon_state_tile.reader(),
         config.engine_config(),
-        config.leanvm_socket(),
         config.pbs(),
         config.builder_bid_timeout(),
         tcaches,
@@ -420,6 +425,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         tile
     };
 
+    let leanvm_cores = config.leanvm_cores().to_vec();
+    // Without a prover the tile only answers each request `None`, unpinned.
+    let leanvm_tile_config = match leanvm_cores.first() {
+        Some(&core) => TileConfig::new(core, Some(ThreadNiceness::Highest)),
+        None => TileConfig::background(None, Some(flux::timing::Duration::from_millis(1))),
+    };
+    let leanvm_tile = LeanVmTile::new(leanvm_cores, tcaches, leanvm_producer);
+
     // Spine
     let spine = SilverSpine::new(None);
     spine.start(None, None, |scoped_spine| {
@@ -430,6 +443,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             attached(storage_tile, scoped_spine, 4),
             attached(application_boundary_tile, scoped_spine, 5),
             attached(data_columns_tile, scoped_spine, 6),
+            (
+                leanvm_tile.name(),
+                Box::new(tile_runner(leanvm_tile, scoped_spine, leanvm_tile_config)),
+            ),
         ];
         for (name, run) in tiles {
             thread::Builder::new()

@@ -424,6 +424,11 @@ impl BeaconStateTile {
         )?;
         self.reader.declare(TCacheId::BoundaryProcessing, &[TileId::Control]);
         self.reader.open(TCacheId::StorageDelivery, "bs_storage_delivery", TReadMode::Sliding)?;
+        // Harnesses without a leanVM tile register no such cache.
+        if self.reader.table().get(TCacheId::LeanVmProcessing).is_ok() {
+            let name = "bs_leanvm_processing";
+            self.reader.open(TCacheId::LeanVmProcessing, name, TReadMode::Sliding)?;
+        }
         self.reader.open(TCacheId::ControlSlot, "bs_control_slot", TReadMode::Strict)
     }
 

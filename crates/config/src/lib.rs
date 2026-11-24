@@ -234,12 +234,13 @@ pub struct Config {
     suggested_fee_recipient: Option<[u8; 20]>,
     #[serde(default)]
     pbs: Option<PbsConfig>,
-    /// Unix socket of the leanVM sidecar.
+    /// Cores of the leanVM prover: the leanVM tile's core first, then the
+    /// cores of its pool's other workers. Empty: no prover.
     #[serde(default)]
-    leanvm_socket: Option<String>,
+    leanvm_cores: Vec<usize>,
     /// Keeps one STARK proof of the pooled PQ votes not yet on chain, so a
     /// local proposal also includes votes older than the newest slot. Costs
-    /// about two more leanVM sidecar proofs each slot.
+    /// about two more leanVM proofs each slot.
     #[serde(default = "default_bool::<true>")]
     pq_rolling_aggregate: bool,
 }
@@ -262,8 +263,8 @@ impl Config {
                 None => self.pbs = Some(PbsConfig::new(endpoint)),
             }
         }
-        if let Some(socket) = overrides.leanvm_socket {
-            self.leanvm_socket = Some(socket);
+        if let Some(cores) = overrides.leanvm_cores {
+            self.leanvm_cores = cores;
         }
     }
 }
@@ -276,7 +277,7 @@ pub struct Overrides {
     pub jwt_secret: Option<String>,
     pub unsafe_no_el: bool,
     pub pbs_endpoint: Option<String>,
-    pub leanvm_socket: Option<String>,
+    pub leanvm_cores: Option<Vec<usize>>,
 }
 
 impl Config {
@@ -361,8 +362,8 @@ impl Config {
         self.pbs.as_ref()
     }
 
-    pub fn leanvm_socket(&self) -> Option<&str> {
-        self.leanvm_socket.as_deref()
+    pub fn leanvm_cores(&self) -> &[usize] {
+        &self.leanvm_cores
     }
 
     pub fn pq_rolling_aggregate(&self) -> bool {
@@ -629,13 +630,13 @@ mod tests {
     }
 
     #[test]
-    fn leanvm_socket_comes_from_the_file_or_the_flag() {
-        assert!(Config::from_toml("", Overrides::default()).unwrap().leanvm_socket().is_none());
-        let toml = "leanvm_socket = \"/run/a.sock\"";
+    fn leanvm_cores_come_from_the_file_or_the_flag() {
+        assert!(Config::from_toml("", Overrides::default()).unwrap().leanvm_cores().is_empty());
+        let toml = "leanvm_cores = [7, 8]";
         let cfg = Config::from_toml(toml, Overrides::default()).unwrap();
-        assert_eq!(cfg.leanvm_socket(), Some("/run/a.sock"));
-        let flag = Overrides { leanvm_socket: Some("/run/b.sock".into()), ..Overrides::default() };
-        assert_eq!(Config::from_toml(toml, flag).unwrap().leanvm_socket(), Some("/run/b.sock"));
+        assert_eq!(cfg.leanvm_cores(), [7, 8]);
+        let flag = Overrides { leanvm_cores: Some(vec![9]), ..Overrides::default() };
+        assert_eq!(Config::from_toml(toml, flag).unwrap().leanvm_cores(), [9]);
     }
 
     #[test]

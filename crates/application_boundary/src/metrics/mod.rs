@@ -19,7 +19,7 @@ use self::{collector::Collector, exposition::Snapshot};
 
 const CLIENTS: usize = 8;
 pub(super) const SOCKETS: usize = CLIENTS + 1;
-const TOKENS: TokenRange = TokenRange::share(7, super::TENANTS);
+const TOKENS: TokenRange = TokenRange::share(6, super::TENANTS);
 const BUDGET: Duration = Duration::from_micros(100);
 const TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_REQUEST: usize = 8192;

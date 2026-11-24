@@ -27,7 +27,7 @@ members = [
   "crates/observe_wire",
   "crates/pbs",
   "crates/peer",
-  "crates/leanvm_api",
+  "crates/leanvm",
   "crates/proto_gen",
   "crates/ssz",
   "crates/slashing",
@@ -41,7 +41,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 repository = "https://github.com/gattaca-com/silver"
-rust-version = "1.91.0"
+rust-version = "1.99.1"
 version = "0.1.0-alpha.17"
 
 [profile.release]
@@ -107,7 +107,7 @@ silver_observe = { path = "crates/observe" }
 silver_observe_wire = { path = "crates/observe_wire" }
 silver_pbs = { path = "crates/pbs" }
 silver_peer = {path = "crates/peer" }
-silver_leanvm_api = { path = "crates/leanvm_api" }
+silver_leanvm = { path = "crates/leanvm" }
 silver_storage = { path = "crates/storage" }
 silver_engine_api = { path = "crates/engine_api" }
 flux = { git = "https://github.com/gattaca-com/flux", rev = "539bf86d97f5d56ff5b7f58cfea6c1bbafbe6714"}
@@ -155,6 +155,10 @@ humantime = "2"
 hmac = "0.12"
 httparse = "1"
 itoa = "1"
+# The experimental prover makes the same proofs as the stable one, faster. It
+# compiles for the target's CPU features: build proving machines with
+# `-C target-cpu=native`, or the AVX2 baseline is about 3x slower.
+lean_vm = { git = "https://github.com/leanEthereum/leanVM", tag = "bindings-v0.17.0", features = ["experimental_prover"] }
 libc = "0.2"
 linkme = "0.3.36"
 milhouse = { version = "0.9", default-features = false }

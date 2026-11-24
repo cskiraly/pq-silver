@@ -21,19 +21,17 @@ use silver_common::{
 use silver_config::{EngineConfig, PbsConfig};
 use silver_engine_api::EngineApi;
 use silver_httpcore::{Bind, Readiness, TokenRange};
-use silver_leanvm_api::LeanVmApi;
 use silver_pbs::{BuilderBids, BuilderEvent, PbsClient, SidecarEvent};
 
 /// A tenant added here takes the next share of a raised `TENANTS`, which keeps
 /// every share disjoint without a base to compute.
-const TENANTS: usize = 7 + cfg!(feature = "metrics") as usize;
+const TENANTS: usize = 6 + cfg!(feature = "metrics") as usize;
 const BEACON_TOKENS: TokenRange = TokenRange::share(0, TENANTS);
 const ENGINE_TOKENS: TokenRange = TokenRange::share(1, TENANTS);
 const PBS_TOKENS: TokenRange = TokenRange::share(2, TENANTS);
 const PBS_HEADER_TOKENS: TokenRange = TokenRange::share(3, TENANTS);
 const PBS_SUBMISSION_TOKENS: TokenRange = TokenRange::share(4, TENANTS);
 const BUILDER_TOKENS: TokenRange = TokenRange::share(5, TENANTS);
-const LEANVM_TOKENS: TokenRange = TokenRange::share(6, TENANTS);
 /// Above every share, so no tenant dispatches it.
 #[cfg(feature = "thread_park")]
 const WAKER_TOKEN: mio::Token = mio::Token(usize::MAX);
@@ -51,7 +49,6 @@ pub struct ApplicationBoundaryTile {
     metrics: Option<metrics::MetricsEndpoint>,
     pub beacon: BeaconApi,
     engine: EngineApi,
-    leanvm: LeanVmApi,
     pbs: Option<PbsClient>,
     builder_bids: BuilderBids,
     /// The tile's one producer, shared by engine responses and the messages
@@ -85,11 +82,9 @@ impl Tile<SilverSpine> for ApplicationBoundaryTile {
     fn loop_body(&mut self, adapter: &mut SpineAdapter<SilverSpine>) {
         self.processing.loop_start();
         self.engine.intake(adapter, &mut self.processing);
-        self.leanvm.intake(adapter);
         self.readiness.wait(if self.worked { Duration::ZERO } else { IDLE_WAIT });
 
         self.engine.spin(adapter, self.readiness.events(), &mut self.processing);
-        self.leanvm.spin(adapter, self.readiness.events(), &mut self.processing);
 
         if let Some(pbs) = &mut self.pbs {
             let Self { readiness, beacon, processing, .. } = self;
@@ -160,7 +155,6 @@ impl ApplicationBoundaryTile {
         spec: &SpecConfig,
         state: BeaconStateReader,
         engine_config: EngineConfig,
-        leanvm_socket: Option<&str>,
         pbs: Option<&PbsConfig>,
         builder_bid_timeout: Duration,
         tcaches: TCacheTable,
@@ -171,7 +165,6 @@ impl ApplicationBoundaryTile {
         let sockets = binds.len() +
             max_connections +
             EngineApi::max_sockets(engine_config.max_connections) +
-            LeanVmApi::MAX_SOCKETS +
             PbsClient::MAX_SOCKETS +
             BuilderBids::MAX_SOCKETS;
         #[cfg(feature = "metrics")]
@@ -216,14 +209,12 @@ impl ApplicationBoundaryTile {
         );
         let builder_bids =
             BuilderBids::new(readiness.registry(), BUILDER_TOKENS, builder_bid_timeout);
-        let leanvm = LeanVmApi::new(readiness.registry(), LEANVM_TOKENS, leanvm_socket, tcaches);
         Self {
             #[cfg(feature = "metrics")]
             metrics: None,
             readiness,
             beacon,
             engine,
-            leanvm,
             pbs,
             builder_bids,
             processing,
@@ -242,8 +233,7 @@ impl ApplicationBoundaryTile {
 
     pub fn open_tcaches(&mut self) -> Result<(), TCacheError> {
         self.beacon.open_tcaches()?;
-        self.engine.open_tcaches()?;
-        self.leanvm.open_tcaches()
+        self.engine.open_tcaches()
     }
 
     fn consume_spine_events(&mut self, adapter: &mut SpineAdapter<SilverSpine>) {

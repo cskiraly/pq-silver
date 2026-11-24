@@ -2,7 +2,7 @@
 
 # `blst`, `hashtree-rs` and `mimalloc` compile C (and hashtree, assembly), and
 # both `build.rs` scripts shell out to `buf`.
-FROM rust:1.91-bookworm AS builder
+FROM rust:1.99.1-bookworm AS builder
 
 ARG BUF_VERSION=1.67.0
 RUN apt-get update && \

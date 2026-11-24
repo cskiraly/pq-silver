@@ -27,6 +27,8 @@ done
 for dir in "$SEACAST_RS" "$PRYSM" "$IMAGE_BUILDER/silver" "$PACKAGE"; do
   [ -d "$dir" ] || { echo "missing checkout: $dir" >&2; exit 1; }
 done
+# Kurtosis does not find the package through a path with `..` in it.
+PACKAGE="$(cd "$PACKAGE" && pwd)"
 if kurtosis enclave inspect "$ENCLAVE" >/dev/null 2>&1 && [ "${FRESH:-0}" != 1 ]; then
   echo "enclave $ENCLAVE exists: set FRESH=1 to replace it" >&2
   exit 1

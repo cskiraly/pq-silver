@@ -1,5 +1,5 @@
-//! Where a group's chunks are kept: one open reservation of the
-//! `ControlSeacast` tcache per group, written in place.
+//! Where a group's chunks are kept: one open reservation of the store's
+//! tcache per group, written in place.
 //!
 //! ```text
 //!   data     K segments of `segment_size`, end to end: the segmented body
@@ -23,11 +23,6 @@ use seacast_core::{
 use seacast_gossipsub::{CHUNK_FIXED, PayloadCodec, build_chunk, payload_group};
 use silver_common::{AcquiredRead, TCache, TCacheId, TCacheProducer, TProducer, TReservation};
 
-/// Groups assembled at once.
-pub(super) const ASSEMBLIES: usize = 8;
-/// Groups of one slot assembled at once: the blocks a slot may see, and room
-/// for a group that does not complete.
-const ASSEMBLIES_PER_SLOT: usize = 3;
 /// A coded group has at most 256 chunks, an uncoded one this many.
 const MAX_N: usize = seacast_codec::MAX_PLAIN_CHUNKS;
 const NO_ASSEMBLY: u16 = u16::MAX;
@@ -182,11 +177,15 @@ struct Slot {
 pub(super) struct Store {
     producer: TProducer,
     slots: Vec<Slot>,
+    /// Groups of one slot assembled at once.
+    per_slot: usize,
 }
 
 impl Store {
-    pub(super) fn new(bytes: usize) -> Self {
-        let slots = (0..ASSEMBLIES)
+    /// Room for the groups of two slots: an assembly is freed at the first
+    /// clock reading past its slot.
+    pub(super) fn new(cache: TCacheId, bytes: usize, per_slot: usize) -> Self {
+        let slots = (0..2 * per_slot)
             .map(|_| Slot {
                 assembly: None,
                 generation: 0,
@@ -194,7 +193,7 @@ impl Store {
                 wire: (0..MAX_N).map(|_| None).collect(),
             })
             .collect();
-        Self { producer: TCache::producer(TCacheId::ControlSeacast, bytes), slots }
+        Self { producer: TCache::producer(cache, bytes), slots, per_slot }
     }
 
     pub(super) fn loop_start(&mut self) {
@@ -214,7 +213,7 @@ impl Store {
         d: &SegmentDescriptor,
     ) -> Option<usize> {
         let of_slot = |s: &&Slot| s.assembly.as_ref().is_some_and(|a| a.slot == slot);
-        if self.slots.iter().filter(of_slot).count() >= ASSEMBLIES_PER_SLOT {
+        if self.slots.iter().filter(of_slot).count() >= self.per_slot {
             return None;
         }
         let free = self.slots.iter().position(|s| s.assembly.is_none())?;

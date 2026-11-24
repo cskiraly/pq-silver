@@ -170,7 +170,9 @@ impl PeerManager {
         };
 
         if let Some(record) = self.database.by_peer_id(&peer_id) {
-            silver_log::info!(conn, ?addr, "trusted peer connected");
+            if record.is_trusted {
+                silver_log::info!(conn, ?addr, "trusted peer connected");
+            }
             state.is_trusted = record.is_trusted;
         }
 

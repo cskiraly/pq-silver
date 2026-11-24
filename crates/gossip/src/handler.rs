@@ -596,7 +596,14 @@ impl GossipHandler {
                             counted += snappy_data.len();
                         }
                         // A chunk is SEACAST's to read, or nobody's.
-                        if matches!(parsed, Ok((GossipTopic::ExecutionPayloadSegment, _))) {
+                        if matches!(
+                            parsed,
+                            Ok((
+                                GossipTopic::ExecutionPayloadSegment |
+                                    GossipTopic::BeaconAggregateAndProofSegment,
+                                _
+                            ))
+                        ) {
                             continue;
                         }
                         if let Err(e) = handle_incoming(

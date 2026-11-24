@@ -77,6 +77,10 @@ pub(crate) struct PeerState {
 
     // Outbound requests in flight count per protocol
     pub outbound_in_flight: [u32; N_STREAM_PROTOCOLS],
+    /// Outgoing request streams the peer closed early that were let pass, and
+    /// when the Metadata request among them is sent again.
+    pub forgiven_resets: u8,
+    pub metadata_retry_at: Option<Instant>,
 
     // Prune backoff deadlines per topic
     pub backoffs: FxHashMap<GossipTopic, Instant>,
@@ -133,6 +137,8 @@ impl Default for PeerState {
             idontwant_ids_received: 0,
             outbound_rpc_limits: RpcRateLimitSet::default(),
             outbound_in_flight: [0; N_STREAM_PROTOCOLS],
+            forgiven_resets: 0,
+            metadata_retry_at: None,
             backoffs: FxHashMap::default(),
             advertised_backoffs: FxHashMap::default(),
             cached_score: 0.0,
@@ -176,6 +182,8 @@ impl PeerState {
         self.idontwant_ids_received = 0;
         self.outbound_rpc_limits = RpcRateLimitSet::default();
         self.outbound_in_flight = [0; N_STREAM_PROTOCOLS];
+        self.forgiven_resets = 0;
+        self.metadata_retry_at = None;
         self.backoffs.clear();
         self.advertised_backoffs.clear();
         self.cached_score = 0.0;

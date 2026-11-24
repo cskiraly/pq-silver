@@ -1267,6 +1267,55 @@ mod tests {
         );
     }
 
+    /// The first closes of a connection cost nothing and the Metadata
+    /// request is sent again after its backoff; the next close is penalised.
+    #[test]
+    fn early_stream_closes_are_forgiven_and_metadata_is_retried() {
+        let mut now = Instant::now();
+        let (mut mgr, mut cap) = fixture(vec![], ScoreParams::default());
+        connect(&mut mgr, &mut cap, 1, 1, now);
+        let close = |mgr: &mut PeerManager, cap: &mut Captured, now| {
+            mgr.handle_event(
+                PeerEvent::P2pStreamClosed {
+                    stream_id: P2pStreamId::new(1, 9, StreamProtocol::Metadata, false),
+                },
+                now,
+                &mut |c| cap.0.push(c),
+            );
+        };
+        let retried = |cap: &Captured| {
+            cap.0
+                .iter()
+                .filter(|c| {
+                    matches!(
+                        c,
+                        PeerControl::P2pSend(P2pSend::Rpc(RpcOutbound::Request(
+                            RpcRequestOutbound { peer: 1, request: RpcRequest::MetaData, .. }
+                        )))
+                    )
+                })
+                .count()
+        };
+
+        use crate::manager::{FORGIVEN_RESETS, RESET_RETRY_BACKOFF};
+        for forgiven in 0..FORGIVEN_RESETS {
+            let sent = retried(&cap);
+            close(&mut mgr, &mut cap, now);
+            assert_eq!(mgr.peers.get(&1).unwrap().application_score, 0.0);
+            let due = now + RESET_RETRY_BACKOFF * (1 << forgiven);
+            assert_eq!(mgr.peers.get(&1).unwrap().metadata_retry_at, Some(due));
+            mgr.run_tick(due - Duration::from_millis(1), &mut |c| cap.0.push(c));
+            assert_eq!(retried(&cap), sent, "not before the backoff");
+            now = due + mgr.params.heartbeat_interval;
+            mgr.run_tick(now, &mut |c| cap.0.push(c));
+            assert_eq!(retried(&cap), sent + 1);
+            assert_eq!(mgr.peers.get(&1).unwrap().metadata_retry_at, None);
+        }
+        close(&mut mgr, &mut cap, now);
+        assert!(mgr.peers.get(&1).unwrap().application_score < 0.0);
+        assert_eq!(mgr.peers.get(&1).unwrap().metadata_retry_at, None);
+    }
+
     /// Same for a peer that takes the request and simply never answers.
     #[test]
     fn stalled_by_root_chase_is_swept_and_reported() {

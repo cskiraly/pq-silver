@@ -1,14 +1,15 @@
 //! SEACAST on gossipsub (`seacast-bindings.md` §4) for the execution payload
-//! envelope: the envelope is cut into Reed-Solomon coded chunks, each a
-//! message on the chunk topic, and offers, holdings and asks travel as strings
-//! among the ids of IHAVE, IDONTWANT and IWANT. The topic, the chunk's frame
-//! and the group's key are Prysm's (`seacast-devnet`).
+//! envelope and the signed aggregate: a body is cut into Reed-Solomon coded
+//! chunks, each a message on its chunk topic, and offers, holdings and asks
+//! travel as strings among the ids of IHAVE, IDONTWANT and IWANT. The
+//! payload's topic, the chunk's frame and the group's key are Prysm's
+//! (`seacast-devnet`); the aggregates' topic has the same frame.
 //!
-//! The node is `seacast_core::SeacastNode`, run here on the control tile's
-//! thread with level 1 and level 2 inline. The mesh is the peer manager's: a
-//! peer is pushed to while it is in the mesh of the chunk topic and
-//! subscribed to it. A decoded envelope is handed on as a message received on
-//! `execution_payload`.
+//! A kind of body has its own `seacast_core::SeacastNode`, run here on the
+//! control tile's thread with level 1 and level 2 inline. The mesh is the peer
+//! manager's: a peer is pushed to while it is in the mesh of the chunk topic
+//! and subscribed to it. A decoded body is handed on as a message received on
+//! the topic it is whole on.
 
 mod host;
 mod store;
@@ -24,14 +25,14 @@ use seacast_core::{
     TimerEvent, TypeCodec, ValidationResult,
 };
 use seacast_gossipsub::{
-    Inbound, MAX_CHUNK_BYTES, PAYLOAD, PayloadCatalog, PayloadCodec, build_chunk, chunk_id_of,
-    is_seacast, payload_group, payload_join, read_holding, read_offer, read_want, split_chunk,
-    write_entry,
+    Inbound, MAX_CHUNK_BYTES, MESSAGE_ID_BYTES, PAYLOAD, PayloadCatalog, PayloadCodec, build_chunk,
+    chunk_id_of, is_seacast, payload_group, payload_join, read_holding, read_offer, read_want,
+    split_chunk, write_entry,
 };
 use silver_common::{
-    BroadcastValidation, ForkName, GossipDomain, GossipTopic, LOCAL_GOSSIP_STREAM_ID, MessageId,
-    Nanos, NewGossipMsg, PeerEvent, SszCache, TCacheProducer, msg_id_valid_snappy,
-    ssz_view::SignedExecutionPayloadEnvelopePqView,
+    BroadcastValidation, ForkName, GossipDomain, GossipTopic, GossipTraffic,
+    LOCAL_GOSSIP_STREAM_ID, MessageId, Nanos, NewGossipMsg, PeerEvent, SszCache, TCacheId,
+    TCacheProducer, msg_id_valid_snappy,
 };
 
 use self::{
@@ -42,38 +43,67 @@ use self::{
 use super::GossipHandler;
 use crate::{GossipHandlerEvent, generated::RPCView, message::copy_compressed_to_protobuf_output};
 
-const CHUNK_TOPIC: GossipTopic = GossipTopic::ExecutionPayloadSegment;
+/// A kind of body that travels as chunks.
+struct Kind {
+    /// The chunks' topic, and the topic the body is a message of.
+    segments: GossipTopic,
+    whole: GossipTopic,
+    cache: TCacheId,
+    store_bytes: usize,
+    /// Groups admitted in a slot. The store has room for one more, ours.
+    groups_per_slot: usize,
+}
+
+const PAYLOADS: usize = 0;
+const KINDS: [Kind; 2] = [
+    Kind {
+        segments: GossipTopic::ExecutionPayloadSegment,
+        whole: GossipTopic::ExecutionPayload,
+        cache: TCacheId::ControlSeacast,
+        store_bytes: 128 << 20,
+        groups_per_slot: 2,
+    },
+    // An aggregate of every aggregator of every subnet.
+    Kind {
+        segments: GossipTopic::BeaconAggregateAndProofSegment,
+        whole: GossipTopic::BeaconAggregateAndProof,
+        cache: TCacheId::ControlSeacastAggregates,
+        store_bytes: 512 << 20,
+        groups_per_slot: 16 * 4,
+    },
+];
 const _: () = assert!(
     silver_common::PAYLOAD_SEGMENT_MIN == seacast_gossipsub::CHUNK_FIXED &&
         silver_common::PAYLOAD_SEGMENT_MAX == MAX_CHUNK_BYTES
 );
 /// Connection indices the node has a slot for.
 const MAX_PEERS: usize = 1280;
-const STORE_BYTES: usize = 128 << 20;
 /// Queue entries written in one pass, over all peers.
 const WRITE_BUDGET: usize = 4096;
 const MAX_N: usize = seacast_codec::MAX_PLAIN_CHUNKS;
 
 type Catalog = PayloadCatalog<Host, StoreCodec>;
 
-/// The handler's SEACAST state. The node is made when the fork digest is
-/// known, since the chunk topic and the chunk ids bind it.
+/// The handler's SEACAST state. The nodes are made when the fork digest is
+/// known, since a chunk topic and its chunk ids bind it.
 pub(super) struct Seacast {
-    /// The connections, for the node made after them.
+    /// The connections, for the nodes made after them.
     peers: FxHashMap<usize, NodeId>,
-    core: Option<Box<Core>>,
+    /// By kind.
+    cores: [Option<Box<Core>>; KINDS.len()],
     /// An envelope sent as chunks is not sent whole, and one decoded from
-    /// chunks is not forwarded whole.
+    /// chunks is not forwarded whole. An aggregate goes both ways.
     payload_only: bool,
 }
 
 impl Default for Seacast {
     fn default() -> Self {
-        Self { peers: FxHashMap::default(), core: None, payload_only: true }
+        Self { peers: FxHashMap::default(), cores: [None, None], payload_only: true }
     }
 }
 
 struct Core {
+    kind: &'static Kind,
     node: SeacastNode<Buf>,
     catalog: Catalog,
     env: Env,
@@ -104,22 +134,24 @@ fn node_id(peer: &silver_common::PeerId) -> NodeId {
 }
 
 impl Core {
-    fn new(domain: GossipDomain, now: Instant) -> Self {
+    fn new(kind: &'static Kind, domain: GossipDomain, now: Instant) -> Self {
         let mut config = NodeConfig::default();
         config.capacities.max_peers = MAX_PEERS;
         // No write is acknowledged to this tile.
         config.source_offers = SourceOffers::Publish;
         let heartbeat = config.heartbeat;
-        let chunk_topic = wire_topic(domain, CHUNK_TOPIC);
+        let chunk_topic = wire_topic(domain, kind.segments);
         let codec = StoreCodec {
             inner: PayloadCodec::new(NoPool, chunk_topic.as_bytes()),
-            store: Store::new(STORE_BYTES),
+            store: Store::new(kind.cache, kind.store_bytes, kind.groups_per_slot + 1),
         };
         let mut env = Env::new();
         env.schedule_after(heartbeat, TimerEvent::Heartbeat);
+        let host = Host::new(MAX_PEERS, kind.groups_per_slot);
         Self {
+            kind,
             node: SeacastNode::new(config),
-            catalog: PayloadCatalog::new(Host::new(MAX_PEERS), codec, domain.digest()),
+            catalog: PayloadCatalog::new(host, codec, domain.digest()),
             env,
             rng: SplitMix64::new(Nanos::now().0),
             deferred: BoundedDeferredStore::with_capacity(MAX_PEERS, 256, 4096),
@@ -275,16 +307,20 @@ impl Core {
                     }
                 }
             }
+            // An ask and a holding name no topic: they are this node's where
+            // it has the group.
             for iwant in &control.iwant {
                 for entry in &iwant.message_ids {
-                    if let Some(want) = read_want(entry, route_hops) {
+                    if self.holds(entry) &&
+                        let Some(want) = read_want(entry, route_hops)
+                    {
                         frame.want(want, &mut self.part(id));
                     }
                 }
             }
             for idontwant in &control.idontwant {
                 for entry in &idontwant.message_ids {
-                    if !is_seacast(entry) {
+                    if !is_seacast(entry) || !self.holds(entry) {
                         continue;
                     }
                     if let Some(holding) = read_holding(entry) {
@@ -300,6 +336,15 @@ impl Core {
             self.node.note_unwanted(id, chunk);
         }
         self.decode();
+    }
+
+    /// Whether the group an IWANT or IDONTWANT entry names has an assembly.
+    fn holds(&self, entry: &[u8]) -> bool {
+        let key = match entry.len() {
+            MESSAGE_ID_BYTES => entry.first_chunk::<32>(),
+            _ => entry.get(5..).and_then(|rest| rest.first_chunk::<32>()),
+        };
+        key.is_some_and(|key| self.catalog.codec.store.find(key).is_some())
     }
 
     /// Level 2 of the groups the node asked for, in place.
@@ -358,12 +403,13 @@ impl Core {
         };
     }
 
-    /// Publishes a local envelope as its source. `false`: its chunks do not
-    /// go out.
+    /// Publishes a local body as its source. `false`: its chunks do not go
+    /// out.
     fn publish(&mut self, ssz: &[u8]) -> bool {
-        if self.domain.format() != ForkName::Pq ||
-            !SignedExecutionPayloadEnvelopePqView::check_size(ssz) ||
-            ssz.len() > seacast_codec::MAX_PLAIN_BODY
+        let (format, whole) = (self.domain.format(), self.kind.whole);
+        if format != ForkName::Pq ||
+            ssz.len() < whole.min_uncompressed_size(format) ||
+            ssz.len() > whole.max_uncompressed_size(format).min(seacast_codec::MAX_PLAIN_BODY)
         {
             return false;
         }
@@ -377,7 +423,7 @@ impl Core {
             return true;
         }
         let Some(at) = codec.store.open(&key, slot, &d) else {
-            silver_log::warn!(slot, "seacast: no room to publish the envelope");
+            silver_log::warn!(slot, topic = %self.kind.whole, "seacast: no room to publish");
             return false;
         };
         self.rebuilt.clear();
@@ -410,17 +456,21 @@ impl GossipHandler {
         self.seacast.payload_only = payload_only;
     }
 
-    /// The node exists once the current domain is known. A later change of
-    /// digest is not followed: the node keeps the topic it was made with.
-    fn seacast_core(&mut self, now: Instant) -> Option<&mut Core> {
-        if self.seacast.core.is_none() {
-            let mut core = Box::new(Core::new(self.domains.current_domain()?, now));
-            for (&peer, &id) in &self.seacast.peers {
-                core.connect(peer, id);
+    /// The nodes exist once the current domain is known. A later change of
+    /// digest is not followed: a node keeps the topic it was made with.
+    fn seacast_cores(&mut self, now: Instant) -> impl Iterator<Item = &mut Core> {
+        if self.seacast.cores[PAYLOADS].is_none() &&
+            let Some(domain) = self.domains.current_domain()
+        {
+            for (kind, slot) in KINDS.iter().zip(&mut self.seacast.cores) {
+                let mut core = Box::new(Core::new(kind, domain, now));
+                for (&peer, &id) in &self.seacast.peers {
+                    core.connect(peer, id);
+                }
+                *slot = Some(core);
             }
-            self.seacast.core = Some(core);
         }
-        self.seacast.core.as_deref_mut()
+        self.seacast.cores.iter_mut().flatten().map(|core| &mut **core)
     }
 
     /// Our GRAFT or PRUNE of `peer` on `topic`.
@@ -431,11 +481,10 @@ impl GossipHandler {
         digest: [u8; 4],
         meshed: bool,
     ) {
-        if topic == CHUNK_TOPIC &&
-            let Some(core) = &mut self.seacast.core &&
-            core.domain.digest() == digest
-        {
-            core.mesh(peer, meshed);
+        for core in self.seacast.cores.iter_mut().flatten() {
+            if core.kind.segments == topic && core.domain.digest() == digest {
+                core.mesh(peer, meshed);
+            }
         }
     }
 
@@ -446,26 +495,21 @@ impl GossipHandler {
         now: Instant,
         emit: &mut impl FnMut(GossipHandlerEvent),
     ) {
-        if let Some(core) = self.seacast_core(now) {
-            core.on_rpc(peer, rpc);
-        }
+        self.seacast_cores(now).for_each(|core| core.on_rpc(peer, rpc));
         self.seacast_flush(emit);
     }
 
     pub(super) fn seacast_tick(&mut self, now: Instant, emit: &mut impl FnMut(GossipHandlerEvent)) {
-        if let Some(core) = self.seacast_core(now) {
-            core.timers(now);
-        }
+        self.seacast_cores(now).for_each(|core| core.timers(now));
         self.seacast_flush(emit);
     }
 
-    /// Publishes a local envelope as chunks. `true`: they go out and the
-    /// envelope is not to be sent whole.
+    /// Publishes a local body as chunks. `true`: they go out and the body
+    /// is not to be sent whole.
     pub(super) fn seacast_publish(&mut self, topic: GossipTopic, ssz: &[u8]) -> bool {
-        let payload_only = self.seacast.payload_only;
-        topic == GossipTopic::ExecutionPayload &&
-            self.seacast_core(Instant::now()).is_some_and(|core| core.publish(ssz)) &&
-            payload_only
+        let only = self.seacast.payload_only && topic == KINDS[PAYLOADS].whole;
+        let mut cores = self.seacast_cores(Instant::now());
+        cores.find(|core| core.kind.whole == topic).is_some_and(|core| core.publish(ssz)) && only
     }
 
     /// Connections open and close.
@@ -474,13 +518,13 @@ impl GossipHandler {
             PeerEvent::P2pNewConnection { p2p_peer_id, ref peer_id_full, .. } => {
                 let id = node_id(peer_id_full);
                 self.seacast.peers.insert(p2p_peer_id, id);
-                if let Some(core) = &mut self.seacast.core {
+                for core in self.seacast.cores.iter_mut().flatten() {
                     core.connect(p2p_peer_id, id);
                 }
             }
             PeerEvent::P2pDisconnect { p2p_peer, .. } => {
                 self.seacast.peers.remove(&p2p_peer);
-                if let Some(core) = &mut self.seacast.core {
+                for core in self.seacast.cores.iter_mut().flatten() {
                     core.disconnect(p2p_peer);
                 }
             }
@@ -490,15 +534,21 @@ impl GossipHandler {
 
     /// The slot clock: the wall slot, its start and a slot's length.
     pub fn seacast_clock(&mut self, wall_slot: u64, slot_start: Instant, slot: Duration) {
-        if let Some(core) = &mut self.seacast.core {
+        for core in self.seacast.cores.iter_mut().flatten() {
             core.clock(wall_slot, slot_start, slot);
         }
     }
 
-    /// Writes what the node has queued, reports its penalties and hands on
-    /// the envelopes it decoded.
     fn seacast_flush(&mut self, emit: &mut impl FnMut(GossipHandlerEvent)) {
-        let Some(core) = self.seacast.core.as_deref_mut() else {
+        for kind in 0..KINDS.len() {
+            self.seacast_flush_kind(kind, emit);
+        }
+    }
+
+    /// Writes what a node has queued, reports its penalties and hands on the
+    /// bodies it decoded.
+    fn seacast_flush_kind(&mut self, kind: usize, emit: &mut impl FnMut(GossipHandlerEvent)) {
+        let Some(core) = self.seacast.cores[kind].as_deref_mut() else {
             return;
         };
         let mut budget = WRITE_BUDGET;
@@ -508,6 +558,7 @@ impl GossipHandler {
                 () => {
                     Out {
                         peer: peer as usize,
+                        traffic: GossipTraffic::of(core.kind.segments),
                         topic: &core.chunk_topic,
                         producer: &mut self.mcache_publish,
                         reader: &mut self.reader,
@@ -544,45 +595,60 @@ impl GossipHandler {
         let mut delivered = std::mem::take(&mut core.env.delivered);
         delivered.retain(|body| core.catalog.codec.store.live(body));
         for body in delivered.drain(..) {
-            match self.seacast_deliver(domain, &body, emit) {
+            match self.seacast_deliver(kind, domain, &body, emit) {
                 Ok(new) => {
-                    let store = self.seacast.core.as_ref().map(|core| &core.catalog.codec.store);
-                    if let Some((slot, root, d, received, peers)) =
+                    let store = self.seacast.cores[kind].as_ref().map(|c| &c.catalog.codec.store);
+                    let Some((slot, root, d, received, peers)) =
                         store.and_then(|store| store.origin(&body))
-                    {
-                        silver_log::info!(
+                    else {
+                        continue;
+                    };
+                    let (root, k, n) = (hex::encode(root), d.k(), d.n());
+                    match kind {
+                        PAYLOADS => silver_log::info!(
                             slot,
-                            root = %hex::encode(root),
-                            k = d.k(),
-                            n = d.n(),
+                            root,
+                            k,
+                            n,
                             received,
                             peers = ?peers,
                             new,
                             "seacast: envelope from segments"
-                        );
+                        ),
+                        _ => silver_log::debug!(
+                            slot,
+                            root,
+                            k,
+                            n,
+                            received,
+                            peers = ?peers,
+                            new,
+                            "seacast: aggregate from segments"
+                        ),
                     }
                 }
-                Err(e) => silver_log::warn!(?e, "seacast: decoded envelope not delivered"),
+                Err(e) => silver_log::warn!(?e, "seacast: decoded body not delivered"),
             }
         }
-        if let Some(core) = &mut self.seacast.core {
+        if let Some(core) = &mut self.seacast.cores[kind] {
             core.env.delivered = delivered;
         }
     }
 
-    /// A decoded envelope, as a message received on `execution_payload`: the
+    /// A decoded body, as a message received on the topic it is whole on: the
     /// SSZ to the incoming tcache, the message for forwarding to the outgoing
     /// one. `body` is the segmented body; where it was compressed before it
     /// was segmented it is the message's data as it stands. `false`: a copy
     /// that came whole was handed on before.
     fn seacast_deliver(
         &mut self,
+        kind: usize,
         domain: GossipDomain,
         body: &Buf,
         emit: &mut impl FnMut(GossipHandlerEvent),
     ) -> Result<bool, silver_common::Error> {
         use silver_common::Error;
-        let topic = GossipTopic::ExecutionPayload;
+        let topic = KINDS[kind].whole;
         let wire = wire_topic(domain, topic);
         let segmented = body.as_bytes();
         let coded = body.index() == 1;
@@ -616,7 +682,7 @@ impl GossipHandler {
         if !self.dedup_cache.insert(fast, msg_hash) {
             return Ok(false);
         }
-        let protobuf = match self.seacast.payload_only {
+        let protobuf = match self.seacast.payload_only && kind == PAYLOADS {
             true => None,
             false => {
                 copy_compressed_to_protobuf_output(&mut self.mcache_publish, compressed, &wire).ok()

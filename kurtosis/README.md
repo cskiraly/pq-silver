@@ -51,6 +51,8 @@ RUST_LOG=info,silver_network=info,silver_peer=info \
 | `net-gloas.yaml` | Older Gloas follower setup using devnet-7 images. |
 | `prepare-package.sh` | Downloads a pinned package and applies `ethereum-package.patch`. Prints its local path. |
 | `build-image.sh` | Builds `silver:proposing`, or the image tag supplied as its first argument. |
+| `net-pq-seacast.yaml` | PQ from genesis, one Prysm and two Silver nodes exchanging the payload as SEACAST segments. |
+| `run-seacast.sh` | Builds `silver:seacast` and `prysm-beacon-chain:seacast-devnet` from sibling checkouts and runs `net-pq-seacast.yaml`. `FRESH=1` replaces the enclave. |
 | `gloas-proposals.yaml` | Assertoor checks for Silver proposals before and after Gloas, then finality and sync. |
 | `setup.sh` | Starts the enclave, harvests network values, writes the config TOML. |
 | `run-reth.sh` | Runs silver's own reth from the harvested `el/` files. |

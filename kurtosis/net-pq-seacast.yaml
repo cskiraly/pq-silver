@@ -1,6 +1,6 @@
 # PQ-from-genesis devnet for SEACAST on gossipsub: one Prysm and two Silver
-# nodes, sixteen validators each. See net-pq.yaml for the package to run it
-# from.
+# nodes, sixteen validators each. `kurtosis/run-seacast.sh` builds both images
+# and runs it.
 #
 # `silver:seacast` is silver:pq-devnet-0's Dockerfile built with
 # `--features silver/metrics,silver/seacast`. `prysm-beacon-chain:seacast-devnet`

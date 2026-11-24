@@ -18,10 +18,13 @@ pub enum TCacheId {
     /// The SEACAST store: group assemblies, written and read by Control alone.
     #[cfg(feature = "seacast")]
     ControlSeacast,
+    /// The same for the aggregates' groups.
+    #[cfg(feature = "seacast")]
+    ControlSeacastAggregates,
 }
 
 impl TCacheId {
-    pub const COUNT: usize = 12 + cfg!(feature = "seacast") as usize;
+    pub const COUNT: usize = 12 + 2 * cfg!(feature = "seacast") as usize;
     pub const ALL: [Self; Self::COUNT] = {
         let mut all = [Self::NetworkIngress; Self::COUNT];
         let mut index = 0;
@@ -32,6 +35,7 @@ impl TCacheId {
         #[cfg(feature = "seacast")]
         {
             all[index] = Self::ControlSeacast;
+            all[index + 1] = Self::ControlSeacastAggregates;
         }
         all
     };
@@ -71,6 +75,8 @@ impl TCacheId {
             Self::ProposedColumns => "proposed_columns",
             #[cfg(feature = "seacast")]
             Self::ControlSeacast => "control_seacast",
+            #[cfg(feature = "seacast")]
+            Self::ControlSeacastAggregates => "control_seacast_aggregates",
         }
     }
 }

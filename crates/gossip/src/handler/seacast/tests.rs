@@ -35,7 +35,7 @@ impl Node {
         .unwrap();
         handler.open_tcaches().unwrap();
         handler.seacast.peers.insert(PEER, [PEER as u8; 32]);
-        handler.set_subscriptions([(GossipTopic::ExecutionPayloadSegment, DOMAIN.digest())]);
+        handler.set_subscriptions(KINDS.map(|kind| (kind.segments, DOMAIN.digest())));
         let mut node = Self { handler, events: Vec::new(), _incoming: incoming };
         node.tick(now);
         node.handler.seacast_clock(SLOT, now, Duration::from_secs(12));
@@ -43,12 +43,9 @@ impl Node {
         node.handler.handle_peer_control(PeerControl::P2pGossipAnnounceSubscriptions {
             p2p_connection: PEER,
         });
-        node.handler.seacast_mesh(
-            PEER,
-            GossipTopic::ExecutionPayloadSegment,
-            DOMAIN.digest(),
-            true,
-        );
+        for kind in &KINDS {
+            node.handler.seacast_mesh(PEER, kind.segments, DOMAIN.digest(), true);
+        }
         node
     }
 
@@ -83,16 +80,17 @@ impl Node {
         self.handler.seacast_rpc(PEER, &rpc, now, &mut |e| events.push(e));
     }
 
-    /// The envelopes handed on as received on `execution_payload`.
-    fn delivered(&mut self) -> Vec<Vec<u8>> {
+    /// The bodies handed on as received on `topic`, and whether each is to
+    /// be forwarded whole.
+    fn delivered(&mut self, topic: GossipTopic) -> Vec<(Vec<u8>, bool)> {
         let mut bodies = Vec::new();
         self.events.retain(|event| {
             let GossipHandlerEvent::NewGossip(msg) = event else {
                 return true;
             };
-            assert_eq!(msg.topic, GossipTopic::ExecutionPayload);
-            bodies
-                .push(self.handler.incoming_gossip_publish.read_buffer(msg.ssz).unwrap().to_vec());
+            assert_eq!(msg.topic, topic);
+            let ssz = self.handler.incoming_gossip_publish.read_buffer(msg.ssz).unwrap().to_vec();
+            bodies.push((ssz, msg.protobuf.is_some()));
             false
         });
         bodies
@@ -137,20 +135,31 @@ fn is_chunk(frame: &[u8]) -> bool {
     RPCView::decode_view(frame).is_ok_and(|rpc| (&rpc.publish).into_iter().next().is_some())
 }
 
-/// An envelope of `len` bytes from one node to the other.
-fn crosses(len: usize, mut keep: impl FnMut(&[u8]) -> bool) {
+/// An envelope of `len` bytes from one node to the other, as chunks alone.
+fn crosses(len: usize, keep: impl FnMut(&[u8]) -> bool) {
+    body_crosses(GossipTopic::ExecutionPayload, envelope(len), false, keep);
+}
+
+/// `ssz` of `topic` from one node to the other. `whole`: it is also to be
+/// sent and forwarded whole.
+fn body_crosses(
+    topic: GossipTopic,
+    ssz: Vec<u8>,
+    whole: bool,
+    mut keep: impl FnMut(&[u8]) -> bool,
+) {
     let start = Instant::now();
     let (mut a, mut b) = (Node::new(start), Node::new(start));
-    let ssz = envelope(len);
     let now = run(&mut a, &mut b, start, |_| true);
 
-    a.handler.seacast_publish(GossipTopic::ExecutionPayload, &ssz);
+    assert_eq!(a.handler.seacast_publish(topic, &ssz), !whole);
     run(&mut a, &mut b, now, &mut keep);
 
-    let delivered = b.delivered();
+    let delivered = b.delivered(topic);
     assert_eq!(delivered.len(), 1);
-    assert!(delivered[0] == ssz);
-    assert!(a.delivered().is_empty());
+    assert!(delivered[0].0 == ssz);
+    assert_eq!(delivered[0].1, whole);
+    assert!(a.delivered(topic).is_empty());
     assert_eq!((a.penalties(), b.penalties()), (0, 0));
 }
 
@@ -163,6 +172,14 @@ fn a_coded_envelope_crosses_a_link() {
 #[test]
 fn an_uncoded_envelope_crosses_a_link() {
     crosses(3_000_000, |_| true);
+}
+
+/// An aggregate travels as chunks on its own topic, and whole beside them.
+#[test]
+fn an_aggregate_crosses_a_link() {
+    let ssz: Vec<u8> =
+        (0..200_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+    body_crosses(GossipTopic::BeaconAggregateAndProof, ssz, true, |_| true);
 }
 
 /// Every third chunk message is lost: the receiver decodes from what

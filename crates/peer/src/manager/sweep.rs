@@ -229,6 +229,12 @@ impl PeerManager {
             {
                 out(SweepOutput::Control(rpc_request(conn, status)));
             }
+            if peer.metadata_retry_at.is_some_and(|at| at <= now) &&
+                peer.try_admit_outbound(conn, StreamProtocol::Metadata, 1, now, true)
+            {
+                peer.metadata_retry_at = None;
+                out(SweepOutput::Control(rpc_request(conn, RpcRequest::MetaData)));
+            }
             if work.persist &&
                 let Some(record) = database.by_p2p_id(conn) &&
                 record.status.is_some() &&

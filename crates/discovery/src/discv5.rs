@@ -147,7 +147,7 @@ impl DiscV5 {
                 .checked_sub(TABLE_LOG_INTERVAL)
                 .unwrap_or_else(Instant::now),
             ping_cursor: 0,
-            lookup_requested: false,
+            lookup_requested: true,
             metrics: Default::default(),
         };
 
@@ -885,8 +885,10 @@ impl DiscV5 {
         if include_self {
             distances.push(0);
         }
+        // Drawn as node ids lie: half of them at 256, a quarter at 255, and
+        // so on. A uniform draw asks mostly for distances no node is at.
         while distances.len() < n {
-            let d = rand::random::<u8>() as u64 + 1; // 1..=256
+            let d = 256 - u64::from(rand::random::<u64>().leading_zeros());
             if !distances.iter().any(|&x| x == d) {
                 distances.push(d);
             }

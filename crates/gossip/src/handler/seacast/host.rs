@@ -11,19 +11,19 @@ use seacast_gossipsub::PayloadHost;
 
 use super::store::Buf;
 
-const ACCEPTED: usize = 64;
-/// Groups admitted in one slot of our clock, as Prysm's interim authority
-/// admits.
-const GROUPS_PER_SLOT: usize = 2;
+const ACCEPTED: usize = 256;
 
 /// The domain, as a stand-in: the bid commits no descriptor yet and a chunk
-/// names no block, so the first groups seen in a slot are taken as authentic.
+/// names no block, so the first groups seen in a slot are taken as authentic,
+/// as Prysm's interim authority takes them.
 /// A group's slot is the wall slot at its first chunk. Whether the body is a
 /// block's payload is Beacon State's to say, of the envelope decoded.
 pub(super) struct Host {
     /// The groups admitted, newest last written, each with its slot.
     accepted: [(GroupId, u64); ACCEPTED],
     next_accepted: usize,
+    /// Groups admitted in one slot of our clock.
+    groups_per_slot: usize,
     node_ids: Vec<NodeId>,
     pub(super) wall_slot: u64,
     /// The start of `wall_slot` on the node's clock, and a slot's length.
@@ -32,10 +32,11 @@ pub(super) struct Host {
 }
 
 impl Host {
-    pub(super) fn new(max_peers: usize) -> Self {
+    pub(super) fn new(max_peers: usize, groups_per_slot: usize) -> Self {
         Self {
             accepted: [(GroupId::default(), u64::MAX); ACCEPTED],
             next_accepted: 0,
+            groups_per_slot,
             node_ids: vec![[0; 32]; max_peers],
             wall_slot: 0,
             slot_start: 0.0,
@@ -70,7 +71,7 @@ impl PayloadHost for Host {
         }
         let slot = self.wall_slot;
         // No fault of the sender: two peers that disagree prove nothing.
-        if self.accepted.iter().filter(|(_, of)| *of == slot).count() >= GROUPS_PER_SLOT {
+        if self.accepted.iter().filter(|(_, of)| *of == slot).count() >= self.groups_per_slot {
             return ValidationResult::Ignore;
         }
         self.admit(*group);

@@ -63,6 +63,12 @@ const SHORT_LIVED_DIAL_BACKOFF: Duration = Duration::from_secs(15 * 60);
 /// Goodbye reason shared with lighthouse/prysm: routine excess-peer shed,
 /// and the remote is expected back.
 const GOODBYE_TOO_MANY_PEERS: u64 = 129;
+/// Outgoing request streams a peer may close early on one connection before
+/// it is penalised for one.
+const FORGIVEN_RESETS: u8 = 3;
+/// A Metadata request closed early is sent again after this, doubled at
+/// each one forgiven.
+const RESET_RETRY_BACKOFF: Duration = Duration::from_secs(1);
 /// Deadweight shed: at most this many idle peers per tick, collected during
 /// the rescore pass so no extra walk of the population is needed.
 const MAX_IDLE_GOODBYES: usize = 32;
@@ -389,19 +395,39 @@ impl PeerManager {
                 // Incoming closes are exempt: that's the requester's
                 // read-timeout giving up on our slow response — penalising
                 // it blames the wrong side.
+                //
+                // The first `FORGIVEN_RESETS` of a connection are let pass:
+                // a client may close a request it is not ready to serve yet,
+                // as Prysm does one sent as the connection comes up.
                 let protocol = stream_id.protocol();
                 if protocol.is_request_response() && protocol != StreamProtocol::Unset {
+                    let forgiven = !stream_id.is_incoming() &&
+                        self.peers.get_mut(&stream_id.peer()).is_some_and(|peer| {
+                            let forgiven = peer.forgiven_resets < FORGIVEN_RESETS;
+                            if forgiven {
+                                if protocol == StreamProtocol::Metadata {
+                                    peer.metadata_retry_at = Some(
+                                        now + RESET_RETRY_BACKOFF * (1 << peer.forgiven_resets),
+                                    );
+                                }
+                                peer.forgiven_resets += 1;
+                            }
+                            forgiven
+                        });
                     silver_log::warn!(
                         ?protocol,
                         incoming = stream_id.is_incoming(),
+                        forgiven,
                         "stream close misbehaviour"
                     );
                     if !stream_id.is_incoming() {
-                        self.on_rpc_misbehaviour(
-                            stream_id.peer(),
-                            RpcSeverity::MidTolerance,
-                            "premature rpc stream close",
-                        );
+                        if !forgiven {
+                            self.on_rpc_misbehaviour(
+                                stream_id.peer(),
+                                RpcSeverity::MidTolerance,
+                                "premature rpc stream close",
+                            );
+                        }
                         // No terminal response will arrive for this stream —
                         // release the outbound in-flight slot, else each
                         // abnormal close permanently burns one of the peer's

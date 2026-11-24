@@ -10,8 +10,7 @@ use seacast_codec::ChunkBytes;
 use seacast_core::ChunkMsg;
 use seacast_gossipsub::RpcOut;
 use silver_common::{
-    Error, GossipMsgOut, GossipTopic, GossipTraffic, TCacheProducer, TCacheRead, TCacheReader,
-    TProducer,
+    Error, GossipMsgOut, GossipTraffic, TCacheProducer, TCacheRead, TCacheReader, TProducer,
 };
 
 use super::store::{Buf, Store};
@@ -74,6 +73,7 @@ impl Default for Scratch {
 /// The frames to one peer.
 pub(super) struct Out<'a, F> {
     pub(super) peer: usize,
+    pub(super) traffic: GossipTraffic,
     pub(super) topic: &'a str,
     pub(super) producer: &'a mut TProducer,
     pub(super) reader: &'a mut TCacheReader,
@@ -144,7 +144,7 @@ impl<F: FnMut(GossipHandlerEvent)> RpcOut<Buf> for Out<'_, F> {
             return;
         }
         if let Some(read) = self.chunk_frame(&chunk.frame) {
-            self.send(read, GossipTraffic::of(GossipTopic::ExecutionPayloadSegment));
+            self.send(read, self.traffic);
         }
     }
 

@@ -39,6 +39,8 @@ impl GossipSchedule {
             GossipTopic::ProposerPreferences,
             #[cfg(feature = "seacast")]
             GossipTopic::ExecutionPayloadSegment,
+            #[cfg(feature = "seacast")]
+            GossipTopic::BeaconAggregateAndProofSegment,
         ]
     }
 
@@ -143,6 +145,8 @@ mod tests {
             GossipTopic::ProposerPreferences,
             #[cfg(feature = "seacast")]
             GossipTopic::ExecutionPayloadSegment,
+            #[cfg(feature = "seacast")]
+            GossipTopic::BeaconAggregateAndProofSegment,
         ]);
         let cutover = at(&mut schedule, 10);
         assert_eq!(cutover.current, gloas);

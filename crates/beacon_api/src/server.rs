@@ -427,8 +427,7 @@ impl Requests {
             // declared past the cap is answered from headers already buffered,
             // and a head past its limit is answered 431 long before the cap.
             // The answer, not the exhaustion, is what ends the connection.
-            loop {
-                let Ok(space) = self.http.read_space() else { break };
+            while let Ok(space) = self.http.read_space() {
                 match stream.read(space) {
                     Ok(0) => return Err(io::Error::from(io::ErrorKind::UnexpectedEof)),
                     Ok(n) => {

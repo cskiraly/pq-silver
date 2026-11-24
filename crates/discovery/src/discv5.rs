@@ -857,7 +857,7 @@ impl DiscV5 {
         }
 
         // Highest counts first, capped to avoid log spam.
-        seen_scratch.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        seen_scratch.sort_unstable_by_key(|seen| std::cmp::Reverse(seen.1));
         seen_scratch.truncate(MAX_LOGGED_FORK_DIGESTS);
         info!(
             buckets = ?kbuckets.bucket_sizes(),

@@ -96,7 +96,7 @@ impl Node {
                 child: None,
             });
         }
-        rows.sort_by(|a, b| b.max_ns.cmp(&a.max_ns));
+        rows.sort_by_key(|row| std::cmp::Reverse(row.max_ns));
         let (kept, folded) = split_for_render(&rows);
 
         let indent = depth * 2;

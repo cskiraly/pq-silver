@@ -30,6 +30,8 @@ mod fr8;
 mod interpolation_kernel;
 #[cfg(target_arch = "x86_64")]
 #[rustfmt::skip]
+// Generated; its one large table is read in place.
+#[allow(clippy::large_const_arrays)]
 pub(crate) mod pairing_lines;
 pub(crate) mod setup;
 mod trusted_setup;

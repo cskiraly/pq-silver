@@ -28,10 +28,14 @@ use std::{
 
 use flux::utils::ArrayVec;
 use silver_common::NodeId;
-use uint::construct_uint;
+use u256::U256;
 
-construct_uint! {
-    struct U256(4);
+// `uint`'s macro expands to code Rust 1.99 deprecates and warns about.
+#[allow(deprecated, semicolon_in_expressions_from_non_local_macros)]
+mod u256 {
+    uint::construct_uint! {
+        pub(super) struct U256(4);
+    }
 }
 
 /// A node's position in the Kademlia keyspace.

@@ -281,6 +281,7 @@ impl PeerManager {
         });
 
         // Archive counters for reputation persistence.
+        #[allow(clippy::drain_collect)]
         self.archived.insert(peer_id, ArchivedState {
             application_score: state.application_score,
             behaviour_penalty: state.behaviour_penalty,

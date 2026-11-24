@@ -118,7 +118,7 @@ impl ChunkBits {
                 //   word + lowest 0b0111_1000  the carry clears the range
                 //   rest          0b0111_0000  & word drops the carried-in bit
                 //   range         0b0000_0110  chunks [1, 3); next pass [4, 7)
-                let lowest = word & word.wrapping_neg();
+                let lowest = word.isolate_lowest_one();
                 let rest = word & word.wrapping_add(lowest);
                 let range = word ^ rest;
                 let start = base + range.trailing_zeros();

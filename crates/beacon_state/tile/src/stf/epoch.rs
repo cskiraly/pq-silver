@@ -447,7 +447,7 @@ pub fn process_slashings(cfg: &SpecConfig, view: &mut StateWriterView, current_e
         sum_slashings.saturating_mul(cfg.proportional_slashing_multiplier).min(total_balance);
     let target_withdrawable = current_epoch + EPOCHS_PER_SLASHINGS_VECTOR as u64 / 2;
     let total_increments = total_balance / EFFECTIVE_BALANCE_INCREMENT;
-    let penalty_per_increment = if total_increments > 0 { adjusted / total_increments } else { 0 };
+    let penalty_per_increment = adjusted.checked_div(total_increments).unwrap_or(0);
 
     let n = view.validators.count();
     let mut slashed_col = view.validators.reader().iter_slashed();

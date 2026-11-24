@@ -114,7 +114,7 @@ impl TileMetricsSet {
     pub fn busy_avg_ns(&self) -> u64 {
         let (sum, count) =
             self.history.iter().fold((0u64, 0u64), |(s, c), e| (s + e.busy, c + e.busy_count));
-        if count == 0 { 0 } else { sum / count }
+        sum.checked_div(count).unwrap_or(0)
     }
 
     /// Largest single work-iteration (ns) over the retained window.

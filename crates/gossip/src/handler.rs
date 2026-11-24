@@ -24,6 +24,9 @@ use crate::{
     message::{copy_compressed_to_protobuf_output, handle_incoming},
 };
 
+#[cfg(feature = "seacast")]
+mod seacast;
+
 /// Reads all incoming gossip protobuf messages (sequential consumer):
 /// - handles control messages and emits spine messages
 /// - deduplicates individual gossip messages
@@ -59,6 +62,9 @@ pub struct GossipHandler {
 
     events: VecDeque<GossipHandlerEvent>,
 
+    #[cfg(feature = "seacast")]
+    seacast: seacast::Seacast,
+
     // Last: the mcache's acquired reads point into it.
     reader: TCacheReader,
 }
@@ -86,6 +92,8 @@ impl GossipHandler {
             snap_encoder: snap::raw::Encoder::new(),
             snap_scratch: Vec::new(),
             events: VecDeque::with_capacity(64),
+            #[cfg(feature = "seacast")]
+            seacast: seacast::Seacast::default(),
             reader: TCacheReader::new(tcaches),
         })
     }
@@ -249,6 +257,10 @@ impl GossipHandler {
             return Err(error.into());
         }
 
+        let protobuf = Some(protobuf);
+        // Sent as chunks alone, the envelope is not forwarded whole.
+        #[cfg(feature = "seacast")]
+        let protobuf = protobuf.filter(|_| !self.seacast_publish(topic, ssz));
         self.events.push_back(GossipHandlerEvent::NewGossip(NewGossipMsg {
             stream_id: LOCAL_GOSSIP_STREAM_ID,
             topic,
@@ -257,7 +269,7 @@ impl GossipHandler {
             msg_hash: msg_id,
             recv_ts,
             ssz: ssz_read,
-            protobuf: Some(protobuf),
+            protobuf,
             validation,
         }));
         Ok(Some(msg_id))
@@ -387,6 +399,8 @@ impl GossipHandler {
                 }
             }
             PeerControl::P2pGossipGraft { p2p: _, p2p_connection, topic, digest } => {
+                #[cfg(feature = "seacast")]
+                self.seacast_mesh(p2p_connection, topic, digest, true);
                 let wire = topic.to_wire(&hex::encode(digest));
                 if let Ok(tcache) =
                     control::copy_grafts_to_protobuf_output(&mut self.mcache_publish, &[&wire])
@@ -406,6 +420,8 @@ impl GossipHandler {
                 digest,
                 backoff_seconds,
             } => {
+                #[cfg(feature = "seacast")]
+                self.seacast_mesh(p2p_connection, topic, digest, false);
                 let wire = topic.to_wire(&hex::encode(digest));
                 if let Ok(tcache) = control::copy_prunes_to_protobuf_output(
                     &mut self.mcache_publish,
@@ -454,6 +470,8 @@ impl GossipHandler {
         self.dedup_cache.maybe_rotate(now);
         self.mcache.maybe_rotate(now);
         self.generate_ihave_messages(now, emit);
+        #[cfg(feature = "seacast")]
+        self.seacast_tick(now, emit);
 
         adapter.consume(|msg: GossipMsgIn, producers| {
             did_work = true;
@@ -502,6 +520,8 @@ impl GossipHandler {
                         partial_messages,
                     }));
                 }
+                #[cfg(feature = "seacast")]
+                self.seacast_rpc(stream_id.peer(), &gossip_proto, now, emit);
                 handle_subscriptions(stream_id, gossip_proto.subscriptions, &self.domains, emit);
 
                 if let Some(partial) = gossip_proto.partial.as_option() &&
@@ -574,6 +594,10 @@ impl GossipHandler {
                             GossipTrafficBytes::Recv
                                 .add(GossipTraffic::of(topic), snappy_data.len());
                             counted += snappy_data.len();
+                        }
+                        // A chunk is SEACAST's to read, or nobody's.
+                        if matches!(parsed, Ok((GossipTopic::ExecutionPayloadSegment, _))) {
+                            continue;
                         }
                         if let Err(e) = handle_incoming(
                             gossip_msg.topic,

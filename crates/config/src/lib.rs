@@ -159,6 +159,9 @@ pub struct Config {
     attestation_subnet_count: u8,
     #[serde(default)]
     partial_columns: PartialColumnsMode,
+    /// Read by a build with the `seacast` feature only.
+    #[serde(default = "default_bool::<true>")]
+    seacast_payload_only: bool,
     #[serde(default)]
     sync_committee_subnets: SyncCommitteeSubnets,
     /// Full multiselect protocol strings.
@@ -524,6 +527,10 @@ impl Config {
 
     pub fn partial_columns(&self) -> PartialColumnsMode {
         self.partial_columns
+    }
+
+    pub fn seacast_payload_only(&self) -> bool {
+        self.seacast_payload_only
     }
 
     pub fn sync_committee_subnets(&self) -> SyncCommitteeSubnets {

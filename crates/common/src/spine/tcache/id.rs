@@ -15,11 +15,27 @@ pub enum TCacheId {
     BoundaryProcessing,
     BeaconStateHandoff,
     ProposedColumns,
+    /// The SEACAST store: group assemblies, written and read by Control alone.
+    #[cfg(feature = "seacast")]
+    ControlSeacast,
 }
 
 impl TCacheId {
-    pub const COUNT: usize = 12;
-    pub const ALL: [Self; Self::COUNT] = [
+    pub const COUNT: usize = 12 + cfg!(feature = "seacast") as usize;
+    pub const ALL: [Self; Self::COUNT] = {
+        let mut all = [Self::NetworkIngress; Self::COUNT];
+        let mut index = 0;
+        while index < Self::BASE.len() {
+            all[index] = Self::BASE[index];
+            index += 1;
+        }
+        #[cfg(feature = "seacast")]
+        {
+            all[index] = Self::ControlSeacast;
+        }
+        all
+    };
+    const BASE: [Self; 12] = [
         Self::NetworkIngress,
         Self::NetworkProcessing,
         Self::ClusterInbound,
@@ -53,8 +69,10 @@ impl TCacheId {
             Self::BoundaryProcessing => "boundary_processing",
             Self::BeaconStateHandoff => "beacon_state_handoff",
             Self::ProposedColumns => "proposed_columns",
+            #[cfg(feature = "seacast")]
+            Self::ControlSeacast => "control_seacast",
         }
     }
 }
 
-const _: () = assert!(TCacheId::ProposedColumns as usize + 1 == TCacheId::COUNT);
+const _: () = assert!(TCacheId::ALL[TCacheId::COUNT - 1] as usize + 1 == TCacheId::COUNT);

@@ -587,6 +587,11 @@ fn message_id(
     stream_id: &P2pStreamId,
     emit: &mut impl FnMut(GossipHandlerEvent),
 ) -> Option<MessageId> {
+    // A SEACAST string or chunk id among the ids is not ours to read.
+    #[cfg(feature = "seacast")]
+    if seacast_gossipsub::is_seacast(bytes) {
+        return None;
+    }
     match (bytes).try_into() {
         Ok(hash) => Some(MessageId { id: hash }),
         Err(_) => {

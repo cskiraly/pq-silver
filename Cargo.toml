@@ -101,6 +101,10 @@ silver_stages = { path = "crates/stages" }
 silver_control = { path = "crates/control" }
 silver_discovery = {path = "crates/discovery" }
 silver_gossip = {path = "crates/gossip" }
+# Local path while both repositories change; a rev-pinned git dependency before merge.
+seacast-core = { path = "../seacast-rs/crates/seacast-core" }
+seacast-codec = { path = "../seacast-rs/crates/seacast-codec" }
+seacast-gossipsub = { path = "../seacast-rs/crates/seacast-gossipsub" }
 silver_httpcore = { path = "crates/httpcore" }
 silver_network = {path = "crates/network" }
 silver_observe = { path = "crates/observe" }

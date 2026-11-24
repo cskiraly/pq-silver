@@ -14,7 +14,18 @@ hex.workspace = true
 silver_common.workspace = true
 silver_log.workspace = true
 snap.workspace = true
+seacast-core = { workspace = true, optional = true }
+seacast-codec = { workspace = true, optional = true }
+seacast-gossipsub = { workspace = true, optional = true }
 
+[features]
+# SEACAST chunked diffusion of the execution payload envelope (`src/seacast`).
+seacast = [
+  "dep:seacast-core",
+  "dep:seacast-codec",
+  "dep:seacast-gossipsub",
+  "silver_common/seacast",
+]
 
 [dev-dependencies]
 criterion.workspace = true

@@ -48,6 +48,10 @@ pub const MAX_GOSSIP_COMPRESSED_PAYLOAD_SIZE: usize =
     32 + MAX_GOSSIP_UNCOMPRESSED_PAYLOAD_SIZE + MAX_GOSSIP_UNCOMPRESSED_PAYLOAD_SIZE / 6;
 pub const MAX_GOSSIP_FRAME_SIZE: usize = MAX_GOSSIP_COMPRESSED_PAYLOAD_SIZE + 1024;
 pub const DEFAULT_GOSSIP_MAX_BYTES_PER_SECOND: u64 = 50_000_000;
+/// SSZ bounds of a message on `execution_payload_segment`: the fixed part of a
+/// segment, and that with the longest proof and data this node takes.
+pub const PAYLOAD_SEGMENT_MIN: usize = 72;
+pub const PAYLOAD_SEGMENT_MAX: usize = 33_288;
 
 /// One fork-qualified gossip domain: the digest names the wire topics,
 /// the format fixes every schema decision for messages carrying it. A
@@ -102,6 +106,9 @@ pub enum GossipTopic {
     ExecutionPayload,
     PayloadAttestationMessage,
     ProposerPreferences,
+    /// A SEACAST chunk of the execution payload envelope, as Prysm's
+    /// `ExecutionPayloadSegment`. Not in a specification yet.
+    ExecutionPayloadSegment,
 }
 
 impl fmt::Display for GossipTopic {
@@ -125,6 +132,7 @@ impl fmt::Display for GossipTopic {
             Self::ExecutionPayload => f.write_str("execution_payload"),
             Self::PayloadAttestationMessage => f.write_str("payload_attestation_message"),
             Self::ProposerPreferences => f.write_str("proposer_preferences"),
+            Self::ExecutionPayloadSegment => f.write_str("execution_payload_segment"),
         }
     }
 }
@@ -142,7 +150,8 @@ impl GossipTopic {
             Self::ExecutionPayloadBid |
                 Self::ExecutionPayload |
                 Self::PayloadAttestationMessage |
-                Self::ProposerPreferences
+                Self::ProposerPreferences |
+                Self::ExecutionPayloadSegment
         )
     }
 
@@ -269,7 +278,7 @@ const EXECUTION_BID_SLOT: usize = DATA_COLUMN_BASE + crate::NUMBER_OF_CUSTODY_GR
 /// Dense per-topic slot space for counters/telemetry: subnet topics get one
 /// slot per subnet, everything else one slot. The layout is fixed so
 /// observers label by the same arithmetic (`gossip_topic_for_counter_slot`).
-pub const GOSSIP_TOPIC_COUNTER_SLOTS: usize = EXECUTION_BID_SLOT + 4;
+pub const GOSSIP_TOPIC_COUNTER_SLOTS: usize = EXECUTION_BID_SLOT + 5;
 
 /// Inverse of `GossipTopic::counter_slot`, for observer-side labelling.
 pub fn gossip_topic_for_counter_slot(slot: usize) -> Option<GossipTopic> {
@@ -294,6 +303,7 @@ pub fn gossip_topic_for_counter_slot(slot: usize) -> Option<GossipTopic> {
         s if s == EXECUTION_BID_SLOT + 1 => GossipTopic::ExecutionPayload,
         s if s == EXECUTION_BID_SLOT + 2 => GossipTopic::PayloadAttestationMessage,
         s if s == EXECUTION_BID_SLOT + 3 => GossipTopic::ProposerPreferences,
+        s if s == EXECUTION_BID_SLOT + 4 => GossipTopic::ExecutionPayloadSegment,
         _ => return None,
     })
 }
@@ -329,6 +339,7 @@ impl GossipTopic {
             Self::ExecutionPayload => EXECUTION_BID_SLOT + 1,
             Self::PayloadAttestationMessage => EXECUTION_BID_SLOT + 2,
             Self::ProposerPreferences => EXECUTION_BID_SLOT + 3,
+            Self::ExecutionPayloadSegment => EXECUTION_BID_SLOT + 4,
         }
     }
 
@@ -361,6 +372,7 @@ impl GossipTopic {
             Self::ExecutionPayloadBid => SIGNED_EXECUTION_PAYLOAD_BID_MAX,
             Self::PayloadAttestationMessage => PAYLOAD_ATTESTATION_MESSAGE_SIZE,
             Self::ProposerPreferences => SIGNED_PROPOSER_PREFERENCES_SIZE,
+            Self::ExecutionPayloadSegment => PAYLOAD_SEGMENT_MAX,
         }
     }
 
@@ -398,6 +410,7 @@ impl GossipTopic {
             Self::ExecutionPayloadBid => SIGNED_EXECUTION_PAYLOAD_BID_MIN,
             Self::PayloadAttestationMessage => PAYLOAD_ATTESTATION_MESSAGE_SIZE,
             Self::ProposerPreferences => SIGNED_PROPOSER_PREFERENCES_SIZE,
+            Self::ExecutionPayloadSegment => PAYLOAD_SEGMENT_MIN,
         }
     }
 
@@ -449,6 +462,7 @@ impl GossipTopic {
             Self::ProposerPreferences => {
                 SszView::SignedProposerPreferences(SignedProposerPreferencesView)
             }
+            Self::ExecutionPayloadSegment => SszView::None,
         }
     }
 }
@@ -474,6 +488,7 @@ impl TryFrom<&str> for GossipTopic {
             "execution_payload" => Self::ExecutionPayload,
             "payload_attestation_message" => Self::PayloadAttestationMessage,
             "proposer_preferences" => Self::ProposerPreferences,
+            "execution_payload_segment" => Self::ExecutionPayloadSegment,
             other => {
                 if let Some(id) = other.strip_prefix("beacon_attestation_") {
                     Self::BeaconAttestation(parse_subnet(id, 64)?)
@@ -521,6 +536,7 @@ mod tests {
             GossipTopic::ExecutionPayload,
             GossipTopic::PayloadAttestationMessage,
             GossipTopic::ProposerPreferences,
+            GossipTopic::ExecutionPayloadSegment,
         ] {
             let s: String = t.into();
             assert_eq!(GossipTopic::try_from(s.as_str()).unwrap(), t);

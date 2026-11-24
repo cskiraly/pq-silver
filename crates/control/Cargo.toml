@@ -19,6 +19,9 @@ silver_log.workspace = true
 silver_peer.workspace = true
 fxhash.workspace = true
 
+[features]
+seacast = ["silver_gossip/seacast"]
+
 [target.'cfg(target_os = "linux")'.dependencies]
 crc32c.workspace = true
 flux-disk.workspace = true

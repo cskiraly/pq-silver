@@ -51,6 +51,8 @@ crypto_simd = ["silver_beacon_state/crypto_simd"]
 # perf-{fn} queues (dev; needs `sudo sysctl kernel.perf_event_paranoid=2`).
 # Surfer picks the queues up when present; non-perf builds are unaffected.
 perf = ["silver_common/perf"]
+# SEACAST chunked diffusion of the execution payload envelope.
+seacast = ["silver_control/seacast"]
 thread_park = [
   "flux/park",
   "silver_application_boundary/thread_park",

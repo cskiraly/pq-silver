@@ -301,12 +301,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     p2p_context.assert_ingress_capacity();
     let network_tile = NetworkTile::new(discv5_addr, discv5, p2p_addr, p2p_endpoint, p2p_context)?;
 
-    let gossip_handler = GossipHandler::new(
+    #[cfg_attr(not(feature = "seacast"), expect(unused_mut))]
+    let mut gossip_handler = GossipHandler::new(
         tcaches,
         control_processing_producer,
         control_gossip_producer,
         Some(silver_common::GossipDomain::new(fork_digest, spec.fork_at_slot(boot_wall_slot))),
     )?;
+    #[cfg(feature = "seacast")]
+    gossip_handler.set_seacast_payload_only(config.seacast_payload_only());
 
     let mut control_tile = Controller::new(
         PeerManager::new(

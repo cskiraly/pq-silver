@@ -48,6 +48,9 @@ alloc-profile = ["silver_common/alloc-profile"]
 # AVX-512 IFMA BLS kernels on CPUs that have them. Without it, every point goes
 # to blst.
 crypto_simd = ["silver_beacon_state/crypto_simd"]
+# leanVM's experimental prover per CPU tier, picked at run time; see
+# `just build-prod`.
+leanvm_cpu_tiers = ["silver_leanvm/cpu_tiers"]
 # Hardware-counter dimension for `#[timed]`: per-call counters via rdpmc on
 # perf-{fn} queues (dev; needs `sudo sysctl kernel.perf_event_paranoid=2`).
 # Surfer picks the queues up when present; non-perf builds are unaffected.

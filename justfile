@@ -30,6 +30,11 @@ cooldown-check:
   out=$(cargo +{{nightly}} update --dry-run -Z min-publish-age 2>&1 | grep -E "Downgrading|is too new" || true); \
   if [ -n "$out" ]; then echo "WARNING: lockfile pins crates younger than the publish-age cooldown:"; echo "$out"; fi
 
+# The production binary: runs on any x86-64 CPU, with leanVM's prover built
+# per CPU tier and the fastest picked at run time (scripts/build-prod.sh).
+build-prod *args:
+  scripts/build-prod.sh --features silver/metrics --bin silver --bin silver_surfer {{args}}
+
 # Regenerate the checked-in protobuf code after editing a `.proto`; needs `buf`.
 proto:
   cargo run -q -p silver_proto_gen

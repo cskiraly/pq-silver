@@ -17,11 +17,13 @@ COPY . .
 
 ARG SILVER_BUILD_COMMIT
 
-# `--locked`: the committed Cargo.lock is under a publish-age cooldown (see
-# the justfile), so resolution must not drift in the image.
+# `--locked` inside: the committed Cargo.lock is under a publish-age cooldown
+# (see the justfile), so resolution must not drift in the image. The script
+# builds for any x86-64 CPU, with leanVM's prover tiers picked at run time.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/silver/target \
-    cargo build --profile release-prod --locked --features silver/metrics --bin silver --bin silver_surfer && \
+    scripts/build-prod.sh --features silver/metrics --bin silver --bin silver_surfer && \
     cp target/release-prod/silver target/release-prod/silver_surfer /usr/local/bin/
 
 FROM debian:bookworm-slim AS runtime

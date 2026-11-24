@@ -14,5 +14,11 @@ silver_log.workspace = true
 [dev-dependencies]
 silver_common = { workspace = true, features = ["test-util"] }
 
+[features]
+# The experimental prover once more per CPU tier, the fastest picked at run
+# time. Only a release build with leanVM's `scripts/tier-rustc` as
+# `RUSTC_WRAPPER` compiles the tiers for their CPUs; `just build-prod` does.
+cpu_tiers = ["lean_vm/cpu_tiers"]
+
 [lints]
 workspace = true

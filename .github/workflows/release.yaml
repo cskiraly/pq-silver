@@ -68,7 +68,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.91.0
+          toolchain: 1.99.1
 
       - name: Install buf
         uses: bufbuild/buf-action@v1
@@ -76,7 +76,7 @@ jobs:
           setup_only: true
 
       - name: Build
-        run: cargo build --profile release-prod --locked --features silver/metrics --bin silver --bin silver_surfer
+        run: scripts/build-prod.sh --features silver/metrics --bin silver --bin silver_surfer
 
       - name: Package
         run: |

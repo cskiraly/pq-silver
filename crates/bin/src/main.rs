@@ -67,6 +67,9 @@ const CONTROL_RPC_TCACHE_SIZE: usize = 1 << 20;
 /// two-million-validator set, so the two the validator API serves never wait
 /// on the one being written.
 const BEACON_STATE_TCACHE_SIZE: usize = 1 << 25;
+/// Tiles run on cores 1 to 6 and the logger on `LOG_CORE`; the leanVM
+/// prover takes the physical cores after them unless configured.
+const LEANVM_FIRST_CORE: usize = silver_log::LOG_CORE + 1;
 /// leanVM responses: a proof is at most 1 MiB, and `beacon_state` copies
 /// each out as it arrives.
 const LEANVM_TCACHE_SIZE: usize = 1 << 24;
@@ -425,7 +428,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         tile
     };
 
-    let leanvm_cores = config.leanvm_cores().to_vec();
+    let leanvm_cores = match config.leanvm_cores() {
+        Some(cores) => cores.to_vec(),
+        None => silver_leanvm::default_cores(LEANVM_FIRST_CORE),
+    };
+    if leanvm_cores.is_empty() {
+        silver_log::warn!("no leanVM prover: set leanvm_cores for one");
+    } else {
+        silver_log::info!(?leanvm_cores, "leanVM prover cores");
+    }
     // Without a prover the tile only answers each request `None`, unpinned.
     let leanvm_tile_config = match leanvm_cores.first() {
         Some(&core) => TileConfig::new(core, Some(ThreadNiceness::Highest)),

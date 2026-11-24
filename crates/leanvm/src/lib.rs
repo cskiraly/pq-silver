@@ -165,6 +165,31 @@ impl LeanVmTile {
     }
 }
 
+/// The default prover cores: one hardware thread per physical core this
+/// process may run on, from CPU `first` on. A core whose sibling thread lies
+/// below `first` is left out: a tile or the logger already runs there. The
+/// prover gains nothing from a second thread on a core.
+pub fn default_cores(first: usize) -> Vec<usize> {
+    let allowed = flux::core_affinity::get_core_ids().unwrap_or_default();
+    let mut cores: Vec<usize> = allowed
+        .into_iter()
+        .map(|core| core.id)
+        .filter(|&cpu| cpu >= first && first_sibling(cpu) == cpu)
+        .collect();
+    cores.sort_unstable();
+    cores
+}
+
+/// The lowest CPU sharing `cpu`'s physical core, `cpu` itself when the
+/// topology is unreadable.
+fn first_sibling(cpu: usize) -> usize {
+    let path = format!("/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list");
+    let Ok(list) = std::fs::read_to_string(path) else { return cpu };
+    // A list such as `1,17` or `0-1`: its first number is its lowest.
+    let first = list.trim().split([',', '-']).next().and_then(|n| n.parse().ok());
+    first.unwrap_or(cpu)
+}
+
 /// The request's body, if it is in an opened tcache and was not lapped
 /// while copied.
 fn copy_body(reader: &mut TCacheReader, req: LeanVmReq) -> Option<Vec<u8>> {

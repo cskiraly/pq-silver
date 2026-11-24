@@ -29,8 +29,9 @@ pub struct Args {
     /// Builder API URL of the PBS sidecar, e.g. `http://localhost:18550`.
     #[arg(long)]
     pbs_endpoint: Option<String>,
-    /// Cores of the leanVM prover, e.g. `7,8,9,10`: the leanVM tile's core
-    /// first, then its pool's other workers. None: no prover.
+    /// Cores of the leanVM prover, e.g. `8,9,10,11`: the leanVM tile's core
+    /// first, then its pool's other workers. Default: every physical core
+    /// after the tiles' and the logger's.
     #[arg(long, value_delimiter = ',')]
     leanvm_cores: Option<Vec<usize>>,
     #[command(subcommand)]

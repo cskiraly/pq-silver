@@ -101,6 +101,16 @@ fn without_a_prover_every_request_is_answered_none() {
     assert!(rig.health.is_empty());
 }
 
+/// Whatever the machine, one CPU per physical core, none below `first`.
+#[test]
+fn default_cores_take_one_thread_per_core_from_first_on() {
+    let all = super::default_cores(0);
+    assert!(!all.is_empty());
+    assert!(all.iter().all(|&cpu| super::first_sibling(cpu) == cpu));
+    let from_two = super::default_cores(2);
+    assert!(from_two.iter().all(|&cpu| cpu >= 2 && all.contains(&cpu)));
+}
+
 fn test_cores() -> Vec<usize> {
     let cores = std::env::var("LEANVM_TEST_CORES").expect("LEANVM_TEST_CORES, e.g. 0,1,2,3");
     cores.split(',').map(|core| core.trim().parse().unwrap()).collect()

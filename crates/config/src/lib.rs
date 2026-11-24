@@ -235,9 +235,10 @@ pub struct Config {
     #[serde(default)]
     pbs: Option<PbsConfig>,
     /// Cores of the leanVM prover: the leanVM tile's core first, then the
-    /// cores of its pool's other workers. Empty: no prover.
+    /// cores of its pool's other workers. Unset: every physical core after
+    /// the tiles' and the logger's. Empty: no prover.
     #[serde(default)]
-    leanvm_cores: Vec<usize>,
+    leanvm_cores: Option<Vec<usize>>,
     /// Keeps one STARK proof of the pooled PQ votes not yet on chain, so a
     /// local proposal also includes votes older than the newest slot. Costs
     /// about two more leanVM proofs each slot.
@@ -264,7 +265,7 @@ impl Config {
             }
         }
         if let Some(cores) = overrides.leanvm_cores {
-            self.leanvm_cores = cores;
+            self.leanvm_cores = Some(cores);
         }
     }
 }
@@ -362,8 +363,9 @@ impl Config {
         self.pbs.as_ref()
     }
 
-    pub fn leanvm_cores(&self) -> &[usize] {
-        &self.leanvm_cores
+    /// `None` when unset, for the default.
+    pub fn leanvm_cores(&self) -> Option<&[usize]> {
+        self.leanvm_cores.as_deref()
     }
 
     pub fn pq_rolling_aggregate(&self) -> bool {
@@ -631,12 +633,14 @@ mod tests {
 
     #[test]
     fn leanvm_cores_come_from_the_file_or_the_flag() {
-        assert!(Config::from_toml("", Overrides::default()).unwrap().leanvm_cores().is_empty());
+        assert!(Config::from_toml("", Overrides::default()).unwrap().leanvm_cores().is_none());
+        let none = Config::from_toml("leanvm_cores = []", Overrides::default()).unwrap();
+        assert_eq!(none.leanvm_cores(), Some(&[][..]));
         let toml = "leanvm_cores = [7, 8]";
         let cfg = Config::from_toml(toml, Overrides::default()).unwrap();
-        assert_eq!(cfg.leanvm_cores(), [7, 8]);
+        assert_eq!(cfg.leanvm_cores(), Some(&[7, 8][..]));
         let flag = Overrides { leanvm_cores: Some(vec![9]), ..Overrides::default() };
-        assert_eq!(Config::from_toml(toml, flag).unwrap().leanvm_cores(), [9]);
+        assert_eq!(Config::from_toml(toml, flag).unwrap().leanvm_cores(), Some(&[9][..]));
     }
 
     #[test]
